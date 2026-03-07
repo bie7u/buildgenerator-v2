@@ -4,6 +4,7 @@ export class Roof {
     this.ridgeHeight = 3.0;
     this.overhang = 0.6;
     this.pitch = 30;
+    this.rotation = 0;   // Y-rotation in degrees: 0 | 90 | 180 | 270
     this.dormers = [];
   }
 
@@ -16,6 +17,7 @@ export class Roof {
       ridgeHeight: this.ridgeHeight,
       overhang: this.overhang,
       pitch: this.pitch,
+      rotation: this.rotation,
       dormers: this.dormers.map(d => d.toJSON()),
     };
   }
@@ -26,6 +28,7 @@ export class Roof {
     r.ridgeHeight = data.ridgeHeight ?? 3.0;
     r.overhang = data.overhang ?? 0.6;
     r.pitch = data.pitch ?? 30;
+    r.rotation = data.rotation ?? 0;
     r.dormers = (data.dormers || []).map(d => DormerWindow.fromJSON(d));
     return r;
   }

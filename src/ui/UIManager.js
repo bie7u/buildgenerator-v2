@@ -186,6 +186,11 @@ export class UIManager {
       if (app.splitMode) app.refreshLivePreview?.();
     });
 
+    document.getElementById('roof-rotation')?.addEventListener('change', e => {
+      app.building.roof.rotation = parseInt(e.target.value, 10) || 0;
+      if (app.splitMode) app.refreshLivePreview?.();
+    });
+
     document.getElementById('btn-add-dormer')?.addEventListener('click', () => {
       app.building.roof.addDormer(new DormerWindow(0, 1.0, 1.2, 1.0));
       if (app.splitMode) app.refreshLivePreview?.();
@@ -198,9 +203,11 @@ export class UIManager {
     const typeEl   = document.getElementById('roof-type');
     const ridgeEl  = document.getElementById('roof-ridge-height');
     const ovEl     = document.getElementById('roof-overhang');
+    const rotEl    = document.getElementById('roof-rotation');
     if (typeEl)  typeEl.value  = roof.type;
     if (ridgeEl) ridgeEl.value = roof.ridgeHeight;
     if (ovEl)    ovEl.value    = roof.overhang;
+    if (rotEl)   rotEl.value   = String(roof.rotation ?? 0);
   }
 
   // ── Quick actions ─────────────────────────────────────────────────────────

@@ -22,30 +22,46 @@ export class RoofGenerator {
   }
 
   generate(building, totalHeight, parentGroup) {
-    const roofGroup = new THREE.Group();
-    this._roofGroups.push(roofGroup);
-    parentGroup.add(roofGroup);
+    // Geometry group – all roof meshes are placed at world-space positions.
+    const geoGroup = new THREE.Group();
 
     const roof = building.roof;
     if (!roof || roof.type === 'flat') {
-      this._generateFlatRoof(building, totalHeight, roof?.overhang ?? 0, roofGroup);
-      return;
+      this._generateFlatRoof(building, totalHeight, roof?.overhang ?? 0, geoGroup);
+    } else {
+      const contour = building.contour;
+      if (contour.length >= 3) {
+        switch (roof.type) {
+          case 'gabled':  this._generateGabledRoof(building, contour, totalHeight, roof, geoGroup); break;
+          case 'hip':     this._generateHipRoof(building, contour, totalHeight, roof, geoGroup); break;
+          case 'shed':    this._generateShedRoof(building, contour, totalHeight, roof, geoGroup); break;
+          case 'gambrel': this._generateGambrelRoof(building, contour, totalHeight, roof, geoGroup); break;
+          default:        this._generateGabledRoof(building, contour, totalHeight, roof, geoGroup);
+        }
+        if (roof.dormers && roof.dormers.length > 0) {
+          this._generateDormers(contour, totalHeight, roof, geoGroup);
+        }
+      }
     }
 
-    const contour = building.contour;
-    if (contour.length < 3) return;
-
-    switch (roof.type) {
-      case 'gabled':  this._generateGabledRoof(building, contour, totalHeight, roof, roofGroup); break;
-      case 'hip':     this._generateHipRoof(building, contour, totalHeight, roof, roofGroup); break;
-      case 'shed':    this._generateShedRoof(building, contour, totalHeight, roof, roofGroup); break;
-      case 'gambrel': this._generateGambrelRoof(building, contour, totalHeight, roof, roofGroup); break;
-      default:        this._generateGabledRoof(building, contour, totalHeight, roof, roofGroup);
+    // Compute building bounding-box centre for rotation pivot.
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of building.contour) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.y); maxZ = Math.max(maxZ, p.y);
     }
+    const cx = (minX + maxX) / 2;
+    const cz = (minZ + maxZ) / 2;
 
-    if (roof.dormers && roof.dormers.length > 0) {
-      this._generateDormers(contour, totalHeight, roof, roofGroup);
-    }
+    // Wrap in a pivot group so rotation is always applied around the building centre.
+    const pivotGroup = new THREE.Group();
+    pivotGroup.position.set(cx, 0, cz);
+    pivotGroup.rotation.y = (roof?.rotation ?? 0) * Math.PI / 180;
+    geoGroup.position.set(-cx, 0, -cz);
+    pivotGroup.add(geoGroup);
+
+    this._roofGroups.push(pivotGroup);
+    parentGroup.add(pivotGroup);
   }
 
   _generateFlatRoof(building, totalHeight, overhang, group) {
@@ -349,9 +365,9 @@ export class RoofGenerator {
       const d2x = next.x - curr.x, d2z = next.y - curr.y;
       const len2 = Math.sqrt(d2x * d2x + d2z * d2z) || 1;
 
-      // Outward normals (left perp for CCW)
-      const on1x = -d1z / len1, on1z = d1x / len1;
-      const on2x = -d2z / len2, on2z = d2x / len2;
+      // Outward normals (right perp for CW-from-above / CCW-in-math contour)
+      const on1x = d1z / len1, on1z = -d1x / len1;
+      const on2x = d2z / len2, on2z = -d2x / len2;
 
       const bx = on1x + on2x;
       const bz = on1z + on2z;
