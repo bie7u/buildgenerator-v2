@@ -455,7 +455,7 @@ export class FloorPlanEditor {
   _handleAddStairsDown(pos) {
     const floor = this.currentFloor;
     if (!floor) return;
-    floor.stairs = new Stairs(pos, 1.2, 3.0, 'north');
+    floor.stairs = new Stairs(pos, 1.2, 3.0, 'north', floor.height);
     this.selectedElement = floor.stairs;
     if (this.app.ui) this.app.ui.showProperties(floor.stairs);
     if (this.app.ui) this.app.ui.updateBuildingInfo();
@@ -1446,7 +1446,8 @@ export class FloorPlanEditor {
     const { p1, p2 } = wp;
     const dir = new THREE.Vector2().subVectors(p2, p1).normalize();
 
-    const ox = -dir.y, oz = dir.x;
+    // Outward normal (right perp for CW-on-screen contour = away from building)
+    const ox = dir.y, oz = -dir.x;
 
     const startP = new THREE.Vector2(
       p1.x + dir.x * bal.offsetAlongWall,

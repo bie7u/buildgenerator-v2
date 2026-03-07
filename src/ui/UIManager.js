@@ -455,13 +455,14 @@ export class UIManager {
       container.appendChild(this._makePropGroup([
         { label: 'Width (m)',      key: 'width',     type: 'number', min: 0.8, step: 0.1 },
         { label: 'Run length (m)', key: 'runLength', type: 'number', min: 1.0, step: 0.1 },
+        { label: 'Height (m)',     key: 'height',    type: 'number', min: 0.5, step: 0.1 },
       ], element, () => app.editor.redraw()));
       container.appendChild(this._makeSelectRow('Direction', 'direction',
         ['north', 'south', 'east', 'west'], element, () => app.editor.redraw()));
       container.appendChild(this._makeFloorCopySection(
         floor => floor.stairs &&
           floor.stairs.position.distanceTo(element.position) <= COPY_TOLERANCE_M,
-        floor => { floor.stairs = new Stairs(element.position, element.width, element.runLength, element.direction); },
+        floor => { floor.stairs = new Stairs(element.position, element.width, element.runLength, element.direction, element.height); },
         floor => { floor.stairs = null; }
       ));
       this._addDeleteButton(container, () => {

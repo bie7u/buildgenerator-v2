@@ -561,7 +561,8 @@ export class BuildingGenerator {
       if (wallLen < 0.01) continue;
       const ndx = dx / wallLen, ndz = dz / wallLen;
 
-      const ox = -ndz, oz = ndx;
+      // Outward normal (right perp for CW-on-screen contour = away from building)
+      const ox = ndz, oz = -ndx;
 
       const midWall = bal.offsetAlongWall + bal.width / 2;
       const cx = p1.x + ndx * midWall + ox * bal.depth / 2;
@@ -664,10 +665,12 @@ export class BuildingGenerator {
     const px = stairs.position.x, pz = stairs.position.y;
     const w = stairs.width;
     const runLen = stairs.runLength;
-    const floorH = floor.height;
+    // Use the stairs' own height (total rise); fall back to floor height for
+    // legacy serialised data that predates the height property.
+    const totalRise = stairs.height > 0 ? stairs.height : floor.height;
 
-    const numSteps = Math.max(3, Math.round(floorH / RISER_HEIGHT_M));
-    const riserH = floorH / numSteps;
+    const numSteps = Math.max(3, Math.round(totalRise / RISER_HEIGHT_M));
+    const riserH = totalRise / numSteps;
     const treadD = Math.min(runLen / numSteps, MAX_TREAD_DEPTH_M);
 
     const dirMap = {
@@ -695,21 +698,6 @@ export class BuildingGenerator {
       mesh.rotation.y = rotY;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      group.add(mesh);
-    }
-
-    const sideH = floorH;
-    const sideLen = treadD * numSteps;
-    for (const side of [-1, 1]) {
-      const geo = new THREE.BoxGeometry(0.05, sideH * 0.6, sideLen);
-      const mesh = new THREE.Mesh(geo, this.railingMat);
-      const localX = side * (w / 2 + 0.025);
-      const localZ = sideLen / 2;
-      const cos = Math.cos(rotY), sin = Math.sin(rotY);
-      const wx = localX * cos - localZ * sin + px;
-      const wz = localX * sin + localZ * cos + pz;
-      mesh.position.set(wx, floorBaseY + sideH * 0.3, wz);
-      mesh.rotation.y = rotY;
       group.add(mesh);
     }
   }
