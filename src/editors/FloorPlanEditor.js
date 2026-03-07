@@ -495,7 +495,10 @@ export class FloorPlanEditor {
       const k = (j + 1) % pts.length;
       holeArea += pts[j].x * pts[k].y - pts[k].x * pts[j].y;
     }
-    if (holeArea < 0) pts.reverse(); // ensure CW (positive shoelace)
+    // THREE.js Shape holes must be CW in shape-space (shape_y = -world_y).
+    // Shape-space area = -world-space area, so holes need world-space area > 0.
+    // Reverse if world-space area is negative to ensure world area > 0.
+    if (holeArea < 0) pts.reverse();
 
     floor.floorHoles.push(hole);
     this.selectedElement = hole;

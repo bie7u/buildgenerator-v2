@@ -99,7 +99,9 @@ export class BuildingGenerator {
           const k = (j + 1) % shapeSpacePts.length;
           holeArea += shapeSpacePts[j].x * shapeSpacePts[k].y - shapeSpacePts[k].x * shapeSpacePts[j].y;
         }
-        // Build hole path - if holeArea > 0 (CCW in shape space), reverse to make CW
+        // THREE.js Shape holes must have negative area in shape space (= CW in shape coords).
+        // shape_y = -world_y, so shape area = -world area.
+        // We need world area > 0; if shape area > 0 (world area < 0), reverse.
         const orderedPts = holeArea > 0 ? [...pts].reverse() : pts;
         const path = new THREE.Path();
         path.moveTo(orderedPts[0].x, -orderedPts[0].y);
