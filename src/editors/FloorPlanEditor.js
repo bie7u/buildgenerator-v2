@@ -488,17 +488,11 @@ export class FloorPlanEditor {
     if (!floor || this._floorHolePoints.length < 3) return;
     const hole = new FloorHole(this._floorHolePoints.map(p => p.clone()));
 
-    // Normalize hole winding to CW (needed for proper slab cutout)
-    let holeArea = 0;
-    const pts = hole.points;
-    for (let j = 0; j < pts.length; j++) {
-      const k = (j + 1) % pts.length;
-      holeArea += pts[j].x * pts[k].y - pts[k].x * pts[j].y;
-    }
-    // THREE.js Shape holes must be CW in shape-space (shape_y = -world_y).
-    // Shape-space area = -world-space area, so holes need world-space area > 0.
-    // Reverse if world-space area is negative to ensure world area > 0.
-    if (holeArea < 0) pts.reverse();
+    // Ensure the hole polygon has positive world-space area (CCW in standard
+    // math).  After the y-negation applied when building the THREE.js Shape
+    // path (shape_y = -world_z), this becomes a negative (CW) area in shape
+    // space — exactly what THREE.js ExtrudeGeometry requires for hole paths.
+    hole.normalizeWorldWindingCCW();
 
     floor.floorHoles.push(hole);
     this.selectedElement = hole;

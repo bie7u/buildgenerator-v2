@@ -90,23 +90,17 @@ export class BuildingGenerator {
     if (floorHoles && floorHoles.length > 0) {
       for (const hole of floorHoles) {
         if (!hole.points || hole.points.length < 3) continue;
+
+        // Use the canonical normalizer: ensure positive world-space area so
+        // that after the y-negation (shape_y = -world_z) the hole path has
+        // negative (CW) area in shape space — as required by THREE.js.
+        hole.normalizeWorldWindingCCW();
         const pts = hole.points;
 
-        // Determine winding in shape space (shape_y = -world_z)
-        const shapeSpacePts = pts.map(p => ({ x: p.x, y: -p.y }));
-        let holeArea = 0;
-        for (let j = 0; j < shapeSpacePts.length; j++) {
-          const k = (j + 1) % shapeSpacePts.length;
-          holeArea += shapeSpacePts[j].x * shapeSpacePts[k].y - shapeSpacePts[k].x * shapeSpacePts[j].y;
-        }
-        // THREE.js Shape holes must have negative area in shape space (= CW in shape coords).
-        // shape_y = -world_y, so shape area = -world area.
-        // We need world area > 0; if shape area > 0 (world area < 0), reverse.
-        const orderedPts = holeArea > 0 ? [...pts].reverse() : pts;
         const path = new THREE.Path();
-        path.moveTo(orderedPts[0].x, -orderedPts[0].y);
-        for (let i = 1; i < orderedPts.length; i++) {
-          path.lineTo(orderedPts[i].x, -orderedPts[i].y);
+        path.moveTo(pts[0].x, -pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+          path.lineTo(pts[i].x, -pts[i].y);
         }
         path.closePath();
         shape.holes.push(path);
