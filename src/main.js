@@ -123,7 +123,8 @@ const app = {
       if (b.contour.length >= 3) b.normalizeAllContourWindings();
     }
     this.generator.generateAll(this.buildings);
-    // Generate roofs
+    // Generate roofs (clearAll resets tracking so each building keeps its own group)
+    this.roofGenerator.clearAll();
     for (const b of this.buildings) {
       if (b.contour.length >= 3 && b.roof) {
         const totalH = b.floors.reduce((s, f) => s + f.height, 0);

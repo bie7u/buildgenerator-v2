@@ -9,20 +9,26 @@ export class RoofGenerator {
     this.dormerWindowMat = new THREE.MeshLambertMaterial({
       color: 0x88bbff, transparent: true, opacity: 0.4, side: THREE.DoubleSide
     });
-    this._roofGroup = null;
+    // One group per building — reset via clearAll() before each full generation.
+    this._roofGroups = [];
+  }
+
+  /**
+   * Remove all previously generated roof groups and reset the tracking array.
+   * Must be called before starting a new generation cycle (after generateAll()).
+   */
+  clearAll() {
+    this._roofGroups = [];
   }
 
   generate(building, totalHeight, parentGroup) {
-    if (this._roofGroup && this._roofGroup.parent) {
-      this._disposeObject(this._roofGroup);
-      parentGroup.remove(this._roofGroup);
-    }
-    this._roofGroup = new THREE.Group();
-    parentGroup.add(this._roofGroup);
+    const roofGroup = new THREE.Group();
+    this._roofGroups.push(roofGroup);
+    parentGroup.add(roofGroup);
 
     const roof = building.roof;
     if (!roof || roof.type === 'flat') {
-      this._generateFlatRoof(building, totalHeight, roof?.overhang ?? 0, this._roofGroup);
+      this._generateFlatRoof(building, totalHeight, roof?.overhang ?? 0, roofGroup);
       return;
     }
 
@@ -30,15 +36,15 @@ export class RoofGenerator {
     if (contour.length < 3) return;
 
     switch (roof.type) {
-      case 'gabled':  this._generateGabledRoof(building, contour, totalHeight, roof, this._roofGroup); break;
-      case 'hip':     this._generateHipRoof(building, contour, totalHeight, roof, this._roofGroup); break;
-      case 'shed':    this._generateShedRoof(building, contour, totalHeight, roof, this._roofGroup); break;
-      case 'gambrel': this._generateGambrelRoof(building, contour, totalHeight, roof, this._roofGroup); break;
-      default:        this._generateGabledRoof(building, contour, totalHeight, roof, this._roofGroup);
+      case 'gabled':  this._generateGabledRoof(building, contour, totalHeight, roof, roofGroup); break;
+      case 'hip':     this._generateHipRoof(building, contour, totalHeight, roof, roofGroup); break;
+      case 'shed':    this._generateShedRoof(building, contour, totalHeight, roof, roofGroup); break;
+      case 'gambrel': this._generateGambrelRoof(building, contour, totalHeight, roof, roofGroup); break;
+      default:        this._generateGabledRoof(building, contour, totalHeight, roof, roofGroup);
     }
 
     if (roof.dormers && roof.dormers.length > 0) {
-      this._generateDormers(contour, totalHeight, roof, this._roofGroup);
+      this._generateDormers(contour, totalHeight, roof, roofGroup);
     }
   }
 

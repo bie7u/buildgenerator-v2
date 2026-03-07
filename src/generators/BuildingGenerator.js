@@ -587,37 +587,45 @@ export class BuildingGenerator {
     const postThick = 0.05;
     const railY = cy + railH;
 
-    const addPost = (lx, lz) => {
-      const geo = new THREE.BoxGeometry(postThick, railH, postThick);
-      const mesh = new THREE.Mesh(geo, this.railingMat);
-      const cos = Math.cos(-wallAngle), sin = Math.sin(-wallAngle);
-      const wx = lx * cos - lz * sin + cx;
-      const wz = lx * sin + lz * cos + cz;
-      mesh.position.set(wx, cy + railH / 2, wz);
-      group.add(mesh);
-    };
+    // Derive wall-parallel and outward unit vectors from wallAngle.
+    // Three.js rotation.y = -wallAngle maps local +X to world (ndx, 0, ndz).
+    // Outward normal (right-perp for CW-on-screen contour): (ox, oz) = (ndz, -ndx).
+    const ndx = Math.cos(wallAngle), ndz = Math.sin(wallAngle);
+    const ox = ndz, oz = -ndx;
+
+    // World XZ position of a point at (aw) along-wall and (od) outward from slab centre.
+    const wPos = (aw, od) => ({
+      x: cx + ndx * aw + ox * od,
+      z: cz + ndz * aw + oz * od,
+    });
 
     const hw = width / 2, hd = depth / 2;
-    addPost(-hw, hd);
-    addPost(hw, hd);
-    addPost(-hw, -hd);
-    addPost(hw, -hd);
 
+    // Four corner posts
+    for (const aw of [-hw, hw]) {
+      for (const od of [-hd, hd]) {
+        const p = wPos(aw, od);
+        const geo = new THREE.BoxGeometry(postThick, railH, postThick);
+        const mesh = new THREE.Mesh(geo, this.railingMat);
+        mesh.position.set(p.x, cy + railH / 2, p.z);
+        group.add(mesh);
+      }
+    }
+
+    // Front rail along the outer edge (outward = +hd)
+    const fp = wPos(0, hd);
     const frontRailGeo = new THREE.BoxGeometry(width, postThick, postThick);
     const frontRail = new THREE.Mesh(frontRailGeo, this.railingMat);
-    const cos = Math.cos(-wallAngle), sin = Math.sin(-wallAngle);
-    const frx = 0 * cos - hd * sin + cx;
-    const frz = 0 * sin + hd * cos + cz;
-    frontRail.position.set(frx, railY, frz);
+    frontRail.position.set(fp.x, railY, fp.z);
     frontRail.rotation.y = -wallAngle;
     group.add(frontRail);
 
+    // Side rails spanning the full depth (outer ↔ inner)
     for (const side of [-1, 1]) {
+      const sp = wPos(side * hw, 0);
       const sideRailGeo = new THREE.BoxGeometry(postThick, postThick, depth);
       const sideRail = new THREE.Mesh(sideRailGeo, this.railingMat);
-      const sx = side * hw * cos - 0 * sin + cx;
-      const sz = side * hw * sin + 0 * cos + cz;
-      sideRail.position.set(sx, railY, sz);
+      sideRail.position.set(sp.x, railY, sp.z);
       sideRail.rotation.y = -wallAngle;
       group.add(sideRail);
     }
