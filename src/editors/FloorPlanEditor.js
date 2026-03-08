@@ -8,6 +8,7 @@ import { Balcony } from '../models/Balcony.js';
 import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
 import { FloorHole } from '../models/FloorHole.js';
+import { roundContour } from '../utils/ContourUtils.js';
 
 // ─── 2D line/shape helpers ─────────────────────────────────────────────────
 function makeLine(pts, color, linewidth = 1) {
@@ -1216,16 +1217,20 @@ export class FloorPlanEditor {
   }
 
   _drawContourAndVertices() {
+    const cr = this.building.cornerRadius || 0;
+
     for (let bi = 0; bi < this.app.buildings.length; bi++) {
       if (bi === this.app.currentBuildingIndex) continue;
       const b = this.app.buildings[bi];
       const bc = b.contour;
       if (bc.length < 2) continue;
+      const bcr = b.cornerRadius || 0;
+      const bcRounded = bcr > 0 && bc.length >= 3 ? roundContour(bc, bcr) : bc;
       if (this.ghostFill && bc.length >= 3) {
-        const fill = makeFilledContour(bc, 0x555566, 0.09);
+        const fill = makeFilledContour(bcRounded, 0x555566, 0.09);
         this.sm.editGroup.add(fill);
       }
-      this.sm.editGroup.add(makeLineLoop(bc, 0x556655));
+      this.sm.editGroup.add(makeLineLoop(bcRounded, 0x556655));
       const cx = bc.reduce((s, p) => s + p.x, 0) / bc.length;
       const cz = bc.reduce((s, p) => s + p.y, 0) / bc.length;
       this.sm.editGroup.add(makeCircle(cx, cz, 0.2, 0x556655));
@@ -1239,25 +1244,30 @@ export class FloorPlanEditor {
     if (base.length === 0 && !hasFloorOverride) return;
 
     if (hasFloorOverride && base.length >= 2) {
+      const baseRounded = cr > 0 && base.length >= 3 ? roundContour(base, cr) : base;
       if (this.ghostFill && base.length >= 3) {
-        this.sm.editGroup.add(makeFilledContour(base, 0x445566, 0.10));
+        this.sm.editGroup.add(makeFilledContour(baseRounded, 0x445566, 0.10));
       }
-      this.sm.editGroup.add(makeLineLoop(base, 0x557799));
+      this.sm.editGroup.add(makeLineLoop(baseRounded, 0x557799));
     }
 
     if (c.length === 0) return;
 
+    // Compute rounded display contour (only for fill/outline; vertex dots stay at original positions).
+    const cRounded = cr > 0 && c.length >= 3 ? roundContour(c, cr) : c;
+
     if (this.ghostFill && c.length >= 3) {
-      const fill = makeFilledContour(c, hasFloorOverride ? 0xaaffcc : 0xaaccff, 0.18);
+      const fill = makeFilledContour(cRounded, hasFloorOverride ? 0xaaffcc : 0xaaccff, 0.18);
       this.sm.editGroup.add(fill);
     }
 
     if (c.length >= 2) {
       const lineColor = hasFloorOverride ? 0x44ffaa : 0xffcc00;
-      const loop = makeLineLoop(c, lineColor);
+      const loop = makeLineLoop(cRounded, lineColor);
       this.sm.editGroup.add(loop);
     }
 
+    // Vertex dots always at original (editable) positions.
     for (let i = 0; i < c.length; i++) {
       const isSelected = (
         this._isDragging &&
@@ -1269,6 +1279,7 @@ export class FloorPlanEditor {
       this.sm.editGroup.add(circle);
     }
 
+    // Wall direction ticks on original segments.
     const n = c.length;
     if (n >= 3) {
       for (let i = 0; i < n; i++) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { roundContour, getCornerTrims } from '../utils/ContourUtils.js';
 
 // Stair geometry constants (all in metres)
 const MAX_TREAD_DEPTH_M = 0.30;
@@ -8,6 +9,9 @@ const RISER_HEIGHT_M    = 0.17;
 const MIN_WALL_HEIGHT            = 0.01;
 const OPENING_BOUNDARY_TOLERANCE = 0.05;
 const MIN_BEVEL_SEGMENT_LEN      = 0.001;
+
+// Shared arc-segment count used by both roundContour calls and the corner-fill geometry.
+const CORNER_ARC_SEGMENTS = 6;
 
 export class BuildingGenerator {
   constructor(sceneManager) {
@@ -53,15 +57,29 @@ export class BuildingGenerator {
       baseY += floor.height;
     }
 
-    // Ground floor slab (bottom of building)
-    this._addSlab(building.getFloorContour(0), 0, null, group);
+    const cr = building.cornerRadius || 0;
+
+    // Cache rounded contours by original contour array identity to avoid
+    // recomputing the same polygon for the ground slab and floor 0's ceiling slab.
+    const roundedCache = new Map();
+    const getRounded = (contour) => {
+      if (!roundedCache.has(contour)) {
+        roundedCache.set(contour, roundContour(contour, cr, CORNER_ARC_SEGMENTS));
+      }
+      return roundedCache.get(contour);
+    };
+
+    // Ground floor slab (bottom of building) — use rounded contour.
+    const groundContour = building.getFloorContour(0);
+    this._addSlab(getRounded(groundContour), 0, null, group);
 
     for (let fi = 0; fi < building.floors.length; fi++) {
       const floor = building.floors[fi];
       const floorBaseY = floorBases[fi];
       const floorContour = building.getFloorContour(fi);
+      const roundedContour = getRounded(floorContour);
 
-      this._generateExternalWalls(floorContour, building.wallThickness, floor, floorBaseY, group);
+      this._generateExternalWalls(floorContour, building.wallThickness, floor, floorBaseY, group, cr);
       this._generateInternalWalls(building, floor, floorBaseY, group);
       this._generateWindowPanes(floorContour, floor, floorBaseY, group);
       this._generateBalconies(floorContour, floor, floorBaseY, group);
@@ -69,7 +87,7 @@ export class BuildingGenerator {
       this._generateStairs(floor, floorBaseY, group);
 
       const ceilingBevelCuts = this._computeCeilingBevelCuts(floorContour, floor, building.wallThickness);
-      this._addSlab(floorContour, floorBaseY + floor.height, floor.floorHoles, group, ceilingBevelCuts);
+      this._addSlab(roundedContour, floorBaseY + floor.height, floor.floorHoles, group, ceilingBevelCuts);
 
       this._generateCeilingBevelMeshes(floorContour, floor, floorBaseY, building.wallThickness, group);
     }
@@ -121,21 +139,33 @@ export class BuildingGenerator {
   }
 
   // ── External walls ────────────────────────────────────────────────────────
-  _generateExternalWalls(contour, wallThick, floor, floorBaseY, group) {
+  _generateExternalWalls(contour, wallThick, floor, floorBaseY, group, cornerRadius = 0) {
     const n = contour.length;
     const floorH = floor.height;
+    const trims = getCornerTrims(contour, cornerRadius);
 
     for (let i = 0; i < n; i++) {
-      const p1 = contour[i];
-      const p2 = contour[(i + 1) % n];
+      const p1o = contour[i];
+      const p2o = contour[(i + 1) % n];
 
-      const dx = p2.x - p1.x;
-      const dz = p2.y - p1.y;
-      const wallLen = Math.sqrt(dx * dx + dz * dz);
+      const dx = p2o.x - p1o.x;
+      const dz = p2o.y - p1o.y;
+      const wallLenFull = Math.sqrt(dx * dx + dz * dz);
+      if (wallLenFull < 0.01) continue;
+
+      const ndx = dx / wallLenFull;
+      const ndz = dz / wallLenFull;
+
+      // Trim this wall segment at both ends to make room for corner arcs.
+      const startTrim = trims[i];
+      const endTrim   = trims[(i + 1) % n];
+      const wallLen   = wallLenFull - startTrim - endTrim;
       if (wallLen < 0.01) continue;
 
-      const ndx = dx / wallLen;
-      const ndz = dz / wallLen;
+      // Actual world-space start of the trimmed wall.
+      const p1 = cornerRadius > 0
+        ? { x: p1o.x + ndx * startTrim, y: p1o.y + ndz * startTrim }
+        : p1o;
 
       const bevels = floor.wallBevels
         .filter(b => b.wallIndex === i)
@@ -155,7 +185,7 @@ export class BuildingGenerator {
       }
       shape.closePath();
 
-      shape.holes = this._getWallHoles(floor, i, topProfile, wallLen, floorH);
+      shape.holes = this._getWallHoles(floor, i, topProfile, wallLen, floorH, startTrim);
 
       const geo = new THREE.ExtrudeGeometry(shape, { depth: wallThick, bevelEnabled: false });
 
@@ -178,8 +208,12 @@ export class BuildingGenerator {
       }
     }
 
-    // Fix 2: Corner fill pieces
-    this._generateCornerFills(contour, wallThick, floorH, floorBaseY, group);
+    // Corner fills / arc pieces.
+    if (cornerRadius > 0) {
+      this._generateRoundedCornerFills(contour, trims, wallThick, floorH, floorBaseY, group);
+    } else {
+      this._generateCornerFills(contour, wallThick, floorH, floorBaseY, group);
+    }
   }
 
   // Fix 2: Corner fill pieces at each contour vertex
@@ -210,6 +244,85 @@ export class BuildingGenerator {
       const geo = new THREE.BoxGeometry(wallThick, floorH, wallThick);
       const mesh = new THREE.Mesh(geo, this.wallMat);
       mesh.position.set(cornerX, floorBaseY + floorH / 2, cornerZ);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+  }
+
+  /**
+   * Replaces the box corner fill with an arc-shaped prism when cornerRadius > 0.
+   * Generates a vertical extruded "pie-slice" from tp1 along the Bezier arc to tp2
+   * and back to the original corner vertex.  This fills the gap between trimmed
+   * wall segments and gives the building its rounded outer corners.
+   */
+  _generateRoundedCornerFills(contour, trims, wallThick, floorH, floorBaseY, group) {
+    const n = contour.length;
+
+    for (let i = 0; i < n; i++) {
+      const r = trims[i];
+      if (r <= 0) {
+        // No rounding at this corner — fall back to box fill.
+        const prev = contour[(i - 1 + n) % n];
+        const curr = contour[i];
+        const next = contour[(i + 1) % n];
+        const d1x = curr.x - prev.x, d1z = curr.y - prev.y;
+        const len1 = Math.sqrt(d1x * d1x + d1z * d1z);
+        if (len1 < 0.001) continue;
+        const nd1x = d1x / len1, nd1z = d1z / len1;
+        const d2x = next.x - curr.x, d2z = next.y - curr.y;
+        const len2 = Math.sqrt(d2x * d2x + d2z * d2z);
+        if (len2 < 0.001) continue;
+        const nd2x = d2x / len2, nd2z = d2z / len2;
+        const in1x = nd1z, in1z = -nd1x;
+        const in2x = nd2z, in2z = -nd2x;
+        const cornerX = curr.x + (in1x + in2x) * wallThick * 0.5;
+        const cornerZ = curr.y + (in1z + in2z) * wallThick * 0.5;
+        const geo = new THREE.BoxGeometry(wallThick, floorH, wallThick);
+        const mesh = new THREE.Mesh(geo, this.wallMat);
+        mesh.position.set(cornerX, floorBaseY + floorH / 2, cornerZ);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+        continue;
+      }
+
+      const prev = contour[(i - 1 + n) % n];
+      const curr = contour[i];
+      const next = contour[(i + 1) % n];
+
+      // Directions from curr toward each adjacent vertex.
+      const d1x = prev.x - curr.x, d1y = prev.y - curr.y;
+      const len1 = Math.sqrt(d1x * d1x + d1y * d1y);
+      const d2x = next.x - curr.x, d2y = next.y - curr.y;
+      const len2 = Math.sqrt(d2x * d2x + d2y * d2y);
+      if (len1 < 0.001 || len2 < 0.001) continue;
+
+      // Tangent points at radius r from the corner vertex.
+      const tp1x = curr.x + (d1x / len1) * r;
+      const tp1y = curr.y + (d1y / len1) * r;
+      const tp2x = curr.x + (d2x / len2) * r;
+      const tp2y = curr.y + (d2y / len2) * r;
+
+      // Build the cross-section polygon: arc from tp1→tp2 (Bezier) + close to curr.
+      // In THREE.Shape coordinates we negate Y so that shape_y = -world_z.
+      const shape = new THREE.Shape();
+      shape.moveTo(tp1x, -tp1y);
+      for (let j = 1; j <= CORNER_ARC_SEGMENTS; j++) {
+        const t  = j / CORNER_ARC_SEGMENTS;
+        const mt = 1 - t;
+        const ax = mt * mt * tp1x + 2 * mt * t * curr.x + t * t * tp2x;
+        const ay = mt * mt * tp1y + 2 * mt * t * curr.y + t * t * tp2y;
+        shape.lineTo(ax, -ay);
+      }
+      shape.lineTo(curr.x, -curr.y);
+      shape.closePath();
+
+      // Extrude vertically.  After rotateX(-PI/2), depth extends in +Y (upward from mesh.position.y).
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: floorH, bevelEnabled: false });
+      geo.rotateX(-Math.PI / 2);
+      const mesh = new THREE.Mesh(geo, this.wallMat);
+      mesh.position.y = floorBaseY;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       group.add(mesh);
@@ -336,13 +449,14 @@ export class BuildingGenerator {
     return result;
   }
 
-  _getWallHoles(floor, wallIndex, topProfile, wallLen, floorH) {
+  _getWallHoles(floor, wallIndex, topProfile, wallLen, floorH, startTrim = 0) {
     const holes = [];
     const maxYAtX = (x) => this._topProfileHeightAt(topProfile, x);
 
     for (const win of floor.windows) {
       if (win.wallIndex !== wallIndex) continue;
-      const x0 = win.offsetAlongWall;
+      // Adjust offset to account for the trimmed wall start.
+      const x0 = win.offsetAlongWall - startTrim;
       const x1 = x0 + win.width;
       const y0 = win.sillHeight;
       const y1 = y0 + win.height;
@@ -360,7 +474,8 @@ export class BuildingGenerator {
 
     for (const door of floor.doors) {
       if (door.wallIndex !== wallIndex) continue;
-      const x0 = door.offsetAlongWall;
+      // Adjust offset to account for the trimmed wall start.
+      const x0 = door.offsetAlongWall - startTrim;
       const x1 = x0 + door.width;
       const y1 = door.height;
       if (x0 < OPENING_BOUNDARY_TOLERANCE || x1 > wallLen - OPENING_BOUNDARY_TOLERANCE) continue;

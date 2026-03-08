@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { roundContour } from '../utils/ContourUtils.js';
 
 export class RoofGenerator {
   constructor(sceneManager) {
@@ -68,7 +69,11 @@ export class RoofGenerator {
     const contour = building.contour;
     if (contour.length < 3) return;
 
-    const expanded = this._expandContour(contour, overhang);
+    // Apply corner rounding before the overhang expansion so that the flat
+    // roof inherits the same rounded footprint as the building below.
+    const cr = building.cornerRadius || 0;
+    const base = cr > 0 ? roundContour(contour, cr) : contour;
+    const expanded = this._expandContour(base, overhang);
 
     const shape = new THREE.Shape();
     shape.moveTo(expanded[0].x, -expanded[0].y);

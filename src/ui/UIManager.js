@@ -144,6 +144,15 @@ export class UIManager {
       app.editor.redraw();
     });
 
+    document.getElementById('corner-radius').addEventListener('input', e => {
+      const v = parseFloat(e.target.value);
+      if (!isNaN(v) && v >= 0) {
+        app.building.cornerRadius = v;
+        app.editor.redraw();
+        if (app.splitMode) app.refreshLivePreview?.();
+      }
+    });
+
     document.getElementById('independent-floors').addEventListener('change', e => {
       // Independent floor mode: future feature hook
     });
@@ -152,6 +161,8 @@ export class UIManager {
   _updateBuildingSettingsInputs() {
     const b = this.app.building;
     document.getElementById('wall-thickness').value = b.wallThickness;
+    const crEl = document.getElementById('corner-radius');
+    if (crEl) crEl.value = b.cornerRadius ?? 0;
     this._updateFloorHeightInput();
   }
 

@@ -6,6 +6,7 @@ export class Building {
   constructor() {
     this.contour = [];           // THREE.Vector2[] - XZ floor plan coordinates
     this.wallThickness = 0.2;    // metres
+    this.cornerRadius = 0;       // metres – corner rounding radius (0 = sharp corners)
     this.floors = [new Floor(0, 2.7)];
     this.roof = new Roof();
   }
@@ -110,6 +111,7 @@ export class Building {
     return {
       contour: this.contour.map(p => ({ x: p.x, y: p.y })),
       wallThickness: this.wallThickness,
+      cornerRadius: this.cornerRadius,
       floors: this.floors.map(f => f.toJSON()),
       roof: this.roof ? this.roof.toJSON() : null,
     };
@@ -119,6 +121,7 @@ export class Building {
     const b = new Building();
     b.contour = (data.contour || []).map(p => new THREE.Vector2(p.x, p.y));
     b.wallThickness = data.wallThickness ?? 0.2;
+    b.cornerRadius = data.cornerRadius ?? 0;
     b.floors = (data.floors || [new Floor(0, 2.7)]).map((fd, i) => Floor.fromJSON(fd, i));
     b.roof = data.roof ? Roof.fromJSON(data.roof) : new Roof();
     return b;
