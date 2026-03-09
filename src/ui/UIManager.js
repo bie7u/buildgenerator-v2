@@ -96,6 +96,7 @@ export class UIManager {
       'select':         'Click to select elements. Drag vertices or elements to reposition.',
       'move':           'Click and drag any element to move it. Wall elements snap to the nearest wall.',
       'draw-contour':   'Floor 0: draws building base contour. Floor 1+: draws this floor\'s custom contour. Double-click or click near first point to close.',
+      'draw-circle':    'Click once to place the centre, then click again to set the radius. Creates a circular (tower) footprint.',
       'draw-wall':      'Click to place wall start, click again for end.',
       'add-window':     'Click on an outer wall segment to add a window.',
       'add-door':       'Click on an outer wall segment to add a door.',

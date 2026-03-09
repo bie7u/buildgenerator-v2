@@ -82,6 +82,7 @@ const ROTATION_HANDLE_OFFSET = 2.5;
 const ANGLE_SNAP_THRESHOLD_DEG = 10;
 const RIGHT_ANGLE_BOX_SIZE = 0.25;
 const ROTATION_HANDLE_HIT_MULTIPLIER = 1.5;
+const CIRCLE_SEGMENTS = 32;
 
 export class FloorPlanEditor {
   constructor(sceneManager, app) {
@@ -97,6 +98,9 @@ export class FloorPlanEditor {
     this._isDrawingContour = false;
     this._previewPoints = [];
     this._angleSnapActive = false;
+
+    this._isDrawingCircle = false;
+    this._circleCenter = null;
 
     this._isDrawingWall = false;
     this._wallStart = null;
@@ -137,6 +141,8 @@ export class FloorPlanEditor {
     this._isDrawingContour = false;
     this._previewPoints = [];
     this._angleSnapActive = false;
+    this._isDrawingCircle = false;
+    this._circleCenter = null;
     this._isDrawingFloorHole = false;
     this._floorHolePoints = [];
     this._isDrawingWall = false;
@@ -154,6 +160,8 @@ export class FloorPlanEditor {
     this._isDrawingContour = false;
     this._previewPoints = [];
     this._angleSnapActive = false;
+    this._isDrawingCircle = false;
+    this._circleCenter = null;
     this._isDrawingFloorHole = false;
     this._floorHolePoints = [];
     this._isDrawingWall = false;
@@ -217,6 +225,7 @@ export class FloorPlanEditor {
       case 'select':         this._handleSelectDown(pos, e); break;
       case 'move':           this._handleMoveDown(pos); break;
       case 'draw-contour':   this._handleDrawContourDown(pos); break;
+      case 'draw-circle':    this._handleDrawCircleDown(pos); break;
       case 'draw-wall':      this._handleDrawWallDown(pos); break;
       case 'add-window':     this._handleAddOpeningDown(pos, 'window'); break;
       case 'add-door':       this._handleAddOpeningDown(pos, 'door'); break;
@@ -267,6 +276,9 @@ export class FloorPlanEditor {
     if (this.tool === 'draw-contour' && this._previewPoints.length > 0) {
       this.redraw();
       this._drawPreviewContour(pos);
+    } else if (this.tool === 'draw-circle' && this._isDrawingCircle && this._circleCenter) {
+      this.redraw();
+      this._drawPreviewCircle(pos);
     } else if (this.tool === 'draw-wall' && this._isDrawingWall && this._wallStart) {
       this.redraw();
       this._drawPreviewLine(this._wallStart, pos, 0x8844ff);
@@ -376,6 +388,97 @@ export class FloorPlanEditor {
 
     const cc = makeCircle(cursor.x, cursor.y, 0.1, this._angleSnapActive ? 0x00ddff : 0xffffff);
     this.sm.editGroup.add(cc);
+  }
+
+  // ── Draw-circle ───────────────────────────────────────────────────────────
+
+  /**
+   * First click → stores the centre.
+   * Second click → computes radius, generates a circle polygon, stores contour.
+   */
+  _handleDrawCircleDown(pos) {
+    if (!this._isDrawingCircle) {
+      // Step 1: place centre
+      this._isDrawingCircle = true;
+      this._circleCenter = pos.clone();
+      this.redraw();
+      this._drawPreviewCircle(pos);
+    } else {
+      // Step 2: confirm radius
+      const radius = this._circleCenter.distanceTo(pos);
+      if (radius < 0.1) {
+        // Too small — cancel
+        this._isDrawingCircle = false;
+        this._circleCenter = null;
+        this.redraw();
+        return;
+      }
+      const pts = FloorPlanEditor._generateCirclePoints(this._circleCenter, radius);
+      this._setActiveContour(pts);
+      this._isDrawingCircle = false;
+      this._circleCenter = null;
+      if (this.app.ui) this.app.ui.updateBuildingInfo();
+      this.redraw();
+      if (this.app.splitMode) this.app.refreshLivePreview?.();
+    }
+  }
+
+  /**
+   * Draws the live preview while the user is setting the radius:
+   *  – a crosshair at the centre
+   *  – a dashed radius line to the cursor
+   *  – the circle outline
+   */
+  _drawPreviewCircle(cursor) {
+    if (!this._circleCenter) return;
+    const cx = this._circleCenter.x;
+    const cz = this._circleCenter.y;
+    const r  = this._circleCenter.distanceTo(cursor);
+
+    // Centre crosshair
+    const CROSS = 0.35;
+    this.sm.editGroup.add(makeLine([
+      new THREE.Vector2(cx - CROSS, cz),
+      new THREE.Vector2(cx + CROSS, cz),
+    ], 0xffcc00));
+    this.sm.editGroup.add(makeLine([
+      new THREE.Vector2(cx, cz - CROSS),
+      new THREE.Vector2(cx, cz + CROSS),
+    ], 0xffcc00));
+
+    if (r > 0.05) {
+      // Dashed radius line from centre to cursor
+      this.sm.editGroup.add(makeDashedLine([
+        new THREE.Vector2(cx, cz),
+        cursor,
+      ], 0xffffff));
+      // Circle outline — same segment count as the final polygon
+      this.sm.editGroup.add(makeCircle(cx, cz, r, 0xffcc00, CIRCLE_SEGMENTS));
+    }
+
+    // Cursor dot
+    this.sm.editGroup.add(makeCircle(cursor.x, cursor.y, 0.1, 0xffffff, 8));
+  }
+
+  /**
+   * Generates a circular polygon approximated with the given number of
+   * segments.  Points are THREE.Vector2 instances, CCW-ordered.
+   *
+   * @param {{x:number,y:number}} center
+   * @param {number} radius
+   * @param {number} segments
+   * @returns {THREE.Vector2[]}
+   */
+  static _generateCirclePoints(center, radius, segments = CIRCLE_SEGMENTS) {
+    const pts = [];
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      pts.push(new THREE.Vector2(
+        center.x + Math.cos(a) * radius,
+        center.y + Math.sin(a) * radius,
+      ));
+    }
+    return pts;
   }
 
   // ── Draw-wall ─────────────────────────────────────────────────────────────
