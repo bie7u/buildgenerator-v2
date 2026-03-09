@@ -8,7 +8,7 @@ import { Balcony } from '../models/Balcony.js';
 import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
 import { FloorHole } from '../models/FloorHole.js';
-import { roundContour } from '../utils/ContourUtils.js';
+import { roundContour, expandCurvedContour } from '../utils/ContourUtils.js';
 
 // ─── 2D line/shape helpers ─────────────────────────────────────────────────
 function makeLine(pts, color, linewidth = 1) {
@@ -73,6 +73,22 @@ function makeFilledContour(contour, color, opacity) {
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = 0.03;
   return mesh;
+}
+
+/**
+ * Draws a quadratic Bézier curve from p0 to p1 with control point cp.
+ */
+function makeQuadBezierLine(p0, cp, p1, color, segments = 16) {
+  const pts = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const mt = 1 - t;
+    pts.push(new THREE.Vector2(
+      mt * mt * p0.x + 2 * mt * t * cp.x + t * t * p1.x,
+      mt * mt * p0.y + 2 * mt * t * cp.y + t * t * p1.y,
+    ));
+  }
+  return makeLine(pts, color);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -188,13 +204,19 @@ export class FloorPlanEditor {
     return this.building.getFloorContour(this.currentFloorIndex);
   }
 
+  get activeContourCurves() {
+    return this.building.getFloorContourCurves(this.currentFloorIndex);
+  }
+
   _setActiveContour(points) {
     if (this.currentFloorIndex === 0 || !this.currentFloor) {
       this.building.contour = points;
+      this.building.contourCurves = new Array(points.length).fill(null);
       this.building.normalizeContourWinding();
     } else {
       const floor = this.currentFloor;
       floor.contour = points;
+      floor.contourCurves = new Array(points.length).fill(null);
       Building._normalizePoints(floor.contour);
     }
   }
@@ -309,11 +331,32 @@ export class FloorPlanEditor {
 
   onDblClick(e) {
     if (this.app.mode !== '2d' && !this.app.splitMode) return;
+    const rawPos = this.sm.getWorldPosition(e);
+    if (rawPos.x > 99990) return;
+    const pos = this._snapToGrid(rawPos);
+
     if (this.tool === 'draw-contour' && this._previewPoints.length >= 3) {
       this._closeContour();
+      return;
     }
     if (this.tool === 'add-floor-hole' && this._floorHolePoints.length >= 3) {
       this._closeFloorHole();
+      return;
+    }
+
+    // Double-click on a curve control point → remove the curve (make edge straight again).
+    if (this.tool === 'select') {
+      const contour = this.activeContour;
+      const curves = this.activeContourCurves;
+      for (let i = 0; i < contour.length; i++) {
+        const cp = curves[i];
+        if (cp && pos.distanceTo(new THREE.Vector2(cp.x, cp.y)) < SNAP_THRESHOLD) {
+          curves[i] = null;
+          this.redraw();
+          if (this.app.splitMode) this.app.refreshLivePreview?.();
+          return;
+        }
+      }
     }
   }
 
@@ -655,6 +698,34 @@ export class FloorPlanEditor {
       return;
     }
 
+    // ── Edge-curve handles: existing control points AND straight-edge midpoints ──
+    const curves = this.activeContourCurves;
+    const n = contour.length;
+    if (n >= 2) {
+      for (let i = 0; i < n; i++) {
+        const p0 = contour[i];
+        const p1 = contour[(i + 1) % n];
+        const cp = curves[i];
+        if (cp) {
+          // Existing control point — drag it directly.
+          if (pos.distanceTo(new THREE.Vector2(cp.x, cp.y)) < SNAP_THRESHOLD) {
+            this._isDragging = true;
+            this._dragTarget = { type: 'edge-cp', edgeIndex: i };
+            return;
+          }
+        } else {
+          // Straight-edge midpoint — dragging it creates a new curve.
+          const mid = new THREE.Vector2((p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+          if (pos.distanceTo(mid) < SNAP_THRESHOLD) {
+            // Control point will be created on first move (see _handleDragMove).
+            this._isDragging = true;
+            this._dragTarget = { type: 'edge-cp', edgeIndex: i };
+            return;
+          }
+        }
+      }
+    }
+
     const floor = this.currentFloor;
     if (floor) {
       for (let wi = 0; wi < floor.internalWalls.length; wi++) {
@@ -742,6 +813,12 @@ export class FloorPlanEditor {
     if (contour.length >= 3 && this._pointInPolygon(pos, contour)) {
       if (this.currentFloorIndex > 0 && floor && !floor.contour) {
         floor.contour = this.building.contour.map(p => p.clone());
+        // Copy curves, ensuring the length matches the copied contour.
+        const srcCurves = this.building.contourCurves;
+        floor.contourCurves = floor.contour.map((_, i) => {
+          const cp = srcCurves[i];
+          return cp ? new THREE.Vector2(cp.x, cp.y) : null;
+        });
         Building._normalizePoints(floor.contour);
       }
       this._isDragging = true;
@@ -761,14 +838,32 @@ export class FloorPlanEditor {
     if (dt.type === 'contour-vertex') {
       if (this.currentFloorIndex > 0 && floor && !floor.contour) {
         floor.contour = this.building.contour.map(p => p.clone());
+        // Copy curves, ensuring the length matches the copied contour.
+        const srcCurves = this.building.contourCurves;
+        floor.contourCurves = floor.contour.map((_, i) => {
+          const cp = srcCurves[i];
+          return cp ? new THREE.Vector2(cp.x, cp.y) : null;
+        });
         Building._normalizePoints(floor.contour);
       }
       this.activeContour[dt.index].copy(pos);
+    } else if (dt.type === 'edge-cp') {
+      // Create or move the Bézier control point for this edge.
+      const curves = this.activeContourCurves;
+      if (!curves[dt.edgeIndex]) {
+        curves[dt.edgeIndex] = new THREE.Vector2(pos.x, pos.y);
+      } else {
+        curves[dt.edgeIndex].set(pos.x, pos.y);
+      }
     } else if (dt.type === 'contour-body') {
       const dx = pos.x - dt.lastPos.x;
       const dy = pos.y - dt.lastPos.y;
       const c = this.activeContour;
       for (const v of c) { v.x += dx; v.y += dy; }
+      // Also move curve control points.
+      for (const cp of this.activeContourCurves) {
+        if (cp) { cp.x += dx; cp.y += dy; }
+      }
       dt.lastPos.copy(pos);
     } else if (dt.type === 'contour-rotate') {
       const c = this.activeContour;
@@ -780,6 +875,15 @@ export class FloorPlanEditor {
         const rz = v.y - dt.centroid.y;
         v.x = dt.centroid.x + rx * cosD - rz * sinD;
         v.y = dt.centroid.y + rx * sinD + rz * cosD;
+      }
+      // Also rotate curve control points.
+      for (const cp of this.activeContourCurves) {
+        if (cp) {
+          const rx = cp.x - dt.centroid.x;
+          const rz = cp.y - dt.centroid.y;
+          cp.x = dt.centroid.x + rx * cosD - rz * sinD;
+          cp.y = dt.centroid.y + rx * sinD + rz * cosD;
+        }
       }
       dt.lastAngle = newAngle;
     } else if (dt.type === 'wall-start' && floor) {
@@ -1322,18 +1426,27 @@ export class FloorPlanEditor {
   _drawContourAndVertices() {
     const cr = this.building.cornerRadius || 0;
 
+    /** Compute the display contour for a given raw contour + curves + cornerRadius. */
+    const getDisplayContour = (rawContour, curves) => {
+      const hasCurves = curves && curves.length > 0 && curves.some(cp => cp !== null);
+      if (hasCurves) {
+        const expanded = expandCurvedContour(rawContour, curves, 16);
+        return cr > 0 && expanded.length >= 3 ? roundContour(expanded, cr) : expanded;
+      }
+      return cr > 0 && rawContour.length >= 3 ? roundContour(rawContour, cr) : rawContour;
+    };
+
     for (let bi = 0; bi < this.app.buildings.length; bi++) {
       if (bi === this.app.currentBuildingIndex) continue;
       const b = this.app.buildings[bi];
       const bc = b.contour;
       if (bc.length < 2) continue;
-      const bcr = b.cornerRadius || 0;
-      const bcRounded = bcr > 0 && bc.length >= 3 ? roundContour(bc, bcr) : bc;
+      const bcDisplay = getDisplayContour(bc, b.contourCurves);
       if (this.ghostFill && bc.length >= 3) {
-        const fill = makeFilledContour(bcRounded, 0x555566, 0.09);
+        const fill = makeFilledContour(bcDisplay, 0x555566, 0.09);
         this.sm.editGroup.add(fill);
       }
-      this.sm.editGroup.add(makeLineLoop(bcRounded, 0x556655));
+      this.sm.editGroup.add(makeLineLoop(bcDisplay, 0x556655));
       const cx = bc.reduce((s, p) => s + p.x, 0) / bc.length;
       const cz = bc.reduce((s, p) => s + p.y, 0) / bc.length;
       this.sm.editGroup.add(makeCircle(cx, cz, 0.2, 0x556655));
@@ -1347,30 +1460,47 @@ export class FloorPlanEditor {
     if (base.length === 0 && !hasFloorOverride) return;
 
     if (hasFloorOverride && base.length >= 2) {
-      const baseRounded = cr > 0 && base.length >= 3 ? roundContour(base, cr) : base;
+      const baseDisplay = getDisplayContour(base, this.building.contourCurves);
       if (this.ghostFill && base.length >= 3) {
-        this.sm.editGroup.add(makeFilledContour(baseRounded, 0x445566, 0.10));
+        this.sm.editGroup.add(makeFilledContour(baseDisplay, 0x445566, 0.10));
       }
-      this.sm.editGroup.add(makeLineLoop(baseRounded, 0x557799));
+      this.sm.editGroup.add(makeLineLoop(baseDisplay, 0x557799));
     }
 
     if (c.length === 0) return;
 
-    // Compute rounded display contour (only for fill/outline; vertex dots stay at original positions).
-    const cRounded = cr > 0 && c.length >= 3 ? roundContour(c, cr) : c;
+    const curves = this.activeContourCurves;
+    const hasCurves = curves.length > 0 && curves.some(cp => cp !== null);
+    const lineColor = hasFloorOverride ? 0x44ffaa : 0xffcc00;
 
+    // ── Draw outline — per-edge so we can render Bézier curves correctly ──
+    if (c.length >= 2) {
+      const n = c.length;
+      if (hasCurves) {
+        for (let i = 0; i < n; i++) {
+          const p0 = c[i], p1 = c[(i + 1) % n];
+          const cp = curves[i];
+          if (cp) {
+            this.sm.editGroup.add(makeQuadBezierLine(p0, cp, p1, lineColor, 24));
+          } else {
+            this.sm.editGroup.add(makeLine([p0, p1], lineColor));
+          }
+        }
+      } else {
+        // No curves: use existing fast path (rounded corners if cr>0)
+        const cDisplay = cr > 0 && c.length >= 3 ? roundContour(c, cr) : c;
+        this.sm.editGroup.add(makeLineLoop(cDisplay, lineColor));
+      }
+    }
+
+    // ── Ghost fill ──
     if (this.ghostFill && c.length >= 3) {
-      const fill = makeFilledContour(cRounded, hasFloorOverride ? 0xaaffcc : 0xaaccff, 0.18);
+      const cDisplay = getDisplayContour(c, curves);
+      const fill = makeFilledContour(cDisplay, hasFloorOverride ? 0xaaffcc : 0xaaccff, 0.18);
       this.sm.editGroup.add(fill);
     }
 
-    if (c.length >= 2) {
-      const lineColor = hasFloorOverride ? 0x44ffaa : 0xffcc00;
-      const loop = makeLineLoop(cRounded, lineColor);
-      this.sm.editGroup.add(loop);
-    }
-
-    // Vertex dots always at original (editable) positions.
+    // ── Vertex dots always at original (editable) positions. ──
     for (let i = 0; i < c.length; i++) {
       const isSelected = (
         this._isDragging &&
@@ -1382,7 +1512,7 @@ export class FloorPlanEditor {
       this.sm.editGroup.add(circle);
     }
 
-    // Wall direction ticks on original segments.
+    // ── Wall direction ticks on original segments. ──
     const n = c.length;
     if (n >= 3) {
       for (let i = 0; i < n; i++) {
@@ -1399,6 +1529,29 @@ export class FloorPlanEditor {
         ];
         const tick = makeLine(tickPts, hasFloorOverride ? 0x448844 : 0x888844);
         this.sm.editGroup.add(tick);
+      }
+    }
+
+    // ── Curve handles (only in Select tool) ──
+    if (n >= 2 && this.tool === 'select') {
+      for (let i = 0; i < n; i++) {
+        const p0 = c[i], p1 = c[(i + 1) % n];
+        const cp = curves[i];
+        if (cp) {
+          // Active control point: dashed tether lines + cyan dot
+          const isDraggingThis = this._isDragging &&
+            this._dragTarget?.type === 'edge-cp' &&
+            this._dragTarget?.edgeIndex === i;
+          const cpColor = isDraggingThis ? 0xffffff : 0x00ccff;
+          const cpV2 = new THREE.Vector2(cp.x, cp.y);
+          this.sm.editGroup.add(makeDashedLine([p0, cpV2], 0x336666));
+          this.sm.editGroup.add(makeDashedLine([cpV2, p1], 0x336666));
+          this.sm.editGroup.add(makeCircle(cp.x, cp.y, 0.14, cpColor));
+        } else {
+          // Straight edge: small midpoint handle (grey diamond)
+          const mx = (p0.x + p1.x) / 2, mz = (p0.y + p1.y) / 2;
+          this.sm.editGroup.add(makeCircle(mx, mz, 0.10, 0x667788));
+        }
       }
     }
 

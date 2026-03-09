@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { roundContour, getCornerTrims } from '../utils/ContourUtils.js';
+import { roundContour, getCornerTrims, expandCurvedContour } from '../utils/ContourUtils.js';
 
 // Stair geometry constants (all in metres)
 const MAX_TREAD_DEPTH_M = 0.30;
@@ -12,6 +12,9 @@ const MIN_BEVEL_SEGMENT_LEN      = 0.001;
 
 // Shared arc-segment count used by both roundContour calls and the corner-fill geometry.
 const CORNER_ARC_SEGMENTS = 6;
+
+// Bézier subdivision count for curved wall segments.
+const CURVE_WALL_STEPS = 12;
 
 export class BuildingGenerator {
   constructor(sceneManager) {
@@ -59,8 +62,17 @@ export class BuildingGenerator {
 
     const cr = building.cornerRadius || 0;
 
-    // Cache rounded contours by original contour array identity to avoid
-    // recomputing the same polygon for the ground slab and floor 0's ceiling slab.
+    // Pre-compute expanded contours (bezier curves → polyline) for each floor.
+    // These are used for slabs only; wall generation receives the original contour + curves.
+    const expandedContours = [];
+    for (let fi = 0; fi < building.floors.length; fi++) {
+      const fc = building.getFloorContour(fi);
+      const curves = building.getFloorContourCurves(fi);
+      const hasCurves = curves && curves.length > 0 && curves.some(cp => cp !== null);
+      expandedContours.push(hasCurves ? expandCurvedContour(fc, curves, CURVE_WALL_STEPS) : fc);
+    }
+
+    // Cache rounded-expanded contours for slab use.
     const roundedCache = new Map();
     const getRounded = (contour) => {
       if (!roundedCache.has(contour)) {
@@ -69,17 +81,18 @@ export class BuildingGenerator {
       return roundedCache.get(contour);
     };
 
-    // Ground floor slab (bottom of building) — use rounded contour.
-    const groundContour = building.getFloorContour(0);
-    this._addSlab(getRounded(groundContour), 0, null, group);
+    // Ground floor slab (bottom of building) — use expanded+rounded contour.
+    this._addSlab(getRounded(expandedContours[0]), 0, null, group);
 
     for (let fi = 0; fi < building.floors.length; fi++) {
       const floor = building.floors[fi];
       const floorBaseY = floorBases[fi];
       const floorContour = building.getFloorContour(fi);
-      const roundedContour = getRounded(floorContour);
+      const floorCurves = building.getFloorContourCurves(fi);
+      const expandedContour = expandedContours[fi];
+      const roundedContour = getRounded(expandedContour);
 
-      this._generateExternalWalls(floorContour, building.wallThickness, floor, floorBaseY, group, cr);
+      this._generateExternalWalls(floorContour, building.wallThickness, floor, floorBaseY, group, cr, floorCurves);
       this._generateInternalWalls(building, floor, floorBaseY, group);
       this._generateWindowPanes(floorContour, floor, floorBaseY, group);
       this._generateBalconies(floorContour, floor, floorBaseY, group);
@@ -139,12 +152,22 @@ export class BuildingGenerator {
   }
 
   // ── External walls ────────────────────────────────────────────────────────
-  _generateExternalWalls(contour, wallThick, floor, floorBaseY, group, cornerRadius = 0) {
+  _generateExternalWalls(contour, wallThick, floor, floorBaseY, group, cornerRadius = 0, curves = null) {
     const n = contour.length;
     const floorH = floor.height;
     const trims = getCornerTrims(contour, cornerRadius);
 
     for (let i = 0; i < n; i++) {
+      const cp = curves && curves[i];
+      if (cp) {
+        // ── Curved segment: subdivide along the Bézier and generate mini-walls. ──
+        this._generateCurvedWallSegment(
+          contour[i], cp, contour[(i + 1) % n],
+          wallThick, floorH, floorBaseY, group,
+        );
+        continue;
+      }
+
       const p1o = contour[i];
       const p2o = contour[(i + 1) % n];
 
@@ -213,6 +236,53 @@ export class BuildingGenerator {
       this._generateRoundedCornerFills(contour, trims, wallThick, floorH, floorBaseY, group);
     } else {
       this._generateCornerFills(contour, wallThick, floorH, floorBaseY, group);
+    }
+  }
+
+  /**
+   * Generates 3D wall geometry for a single curved contour edge by subdividing
+   * the quadratic Bézier into `CURVE_WALL_STEPS` straight mini-segments.
+   * Windows and doors on curved edges are not supported.
+   */
+  _generateCurvedWallSegment(p0, cp, p1, wallThick, floorH, floorBaseY, group) {
+    for (let j = 0; j < CURVE_WALL_STEPS; j++) {
+      const t0 = j / CURVE_WALL_STEPS;
+      const t1 = (j + 1) / CURVE_WALL_STEPS;
+      const mt0 = 1 - t0, mt1 = 1 - t1;
+
+      // Bézier evaluation at t0 and t1.
+      const ax = mt0 * mt0 * p0.x + 2 * mt0 * t0 * cp.x + t0 * t0 * p1.x;
+      const az = mt0 * mt0 * p0.y + 2 * mt0 * t0 * cp.y + t0 * t0 * p1.y;
+      const bx = mt1 * mt1 * p0.x + 2 * mt1 * t1 * cp.x + t1 * t1 * p1.x;
+      const bz = mt1 * mt1 * p0.y + 2 * mt1 * t1 * cp.y + t1 * t1 * p1.y;
+
+      const dx = bx - ax, dz = bz - az;
+      const segLen = Math.sqrt(dx * dx + dz * dz);
+      if (segLen < 0.001) continue;
+      const ndx = dx / segLen, ndz = dz / segLen;
+
+      // Simple rectangle wall shape (no holes, no bevels on curved walls).
+      const shape = new THREE.Shape();
+      shape.moveTo(0, 0);
+      shape.lineTo(segLen, 0);
+      shape.lineTo(segLen, floorH);
+      shape.lineTo(0, floorH);
+      shape.closePath();
+
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: wallThick, bevelEnabled: false });
+      const m = new THREE.Matrix4();
+      m.set(
+        ndx, 0,  ndz, ax,
+        0,   1,  0,   floorBaseY,
+        ndz, 0, -ndx, az,
+        0,   0,  0,   1,
+      );
+      geo.applyMatrix4(m);
+
+      const mesh = new THREE.Mesh(geo, this.wallMat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
     }
   }
 

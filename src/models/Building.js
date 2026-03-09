@@ -5,6 +5,7 @@ import { Roof } from './Roof.js';
 export class Building {
   constructor() {
     this.contour = [];           // THREE.Vector2[] - XZ floor plan coordinates
+    this.contourCurves = [];     // Array<null|THREE.Vector2> – per-edge Bézier control points
     this.wallThickness = 0.2;    // metres
     this.cornerRadius = 0;       // metres – corner rounding radius (0 = sharp corners)
     this.floors = [new Floor(0, 2.7)];
@@ -38,6 +39,19 @@ export class Building {
       return floor.contour;
     }
     return this.contour;
+  }
+
+  /**
+   * Returns the curve control-point array for the contour that applies at
+   * the given floor index (mirrors getFloorContour).
+   */
+  getFloorContourCurves(floorIndex) {
+    if (floorIndex === 0) return this.contourCurves;
+    const floor = this.floors[floorIndex];
+    if (floor && floor.contour && floor.contour.length >= 3) {
+      return floor.contourCurves || [];
+    }
+    return this.contourCurves;
   }
 
   /**
@@ -110,6 +124,7 @@ export class Building {
   toJSON() {
     return {
       contour: this.contour.map(p => ({ x: p.x, y: p.y })),
+      contourCurves: this.contourCurves.map(cp => cp ? { x: cp.x, y: cp.y } : null),
       wallThickness: this.wallThickness,
       cornerRadius: this.cornerRadius,
       floors: this.floors.map(f => f.toJSON()),
@@ -120,6 +135,7 @@ export class Building {
   static fromJSON(data) {
     const b = new Building();
     b.contour = (data.contour || []).map(p => new THREE.Vector2(p.x, p.y));
+    b.contourCurves = (data.contourCurves || []).map(cp => cp ? new THREE.Vector2(cp.x, cp.y) : null);
     b.wallThickness = data.wallThickness ?? 0.2;
     b.cornerRadius = data.cornerRadius ?? 0;
     b.floors = (data.floors || [new Floor(0, 2.7)]).map((fd, i) => Floor.fromJSON(fd, i));

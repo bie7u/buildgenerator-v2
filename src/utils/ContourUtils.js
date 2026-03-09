@@ -55,6 +55,47 @@ export function roundContour(pts, radius, segments = 6) {
 }
 
 /**
+ * Expands a contour with optional per-edge quadratic Bézier curves into a
+ * polyline of straight segments, suitable for rendering and 3D generation.
+ *
+ * For edge i (from contour[i] to contour[(i+1)%n]):
+ *   - curves[i] == null  → straight segment (only the start vertex is added)
+ *   - curves[i] == {x,y} → quadratic Bézier with that control point;
+ *                           `segments-1` intermediate waypoints are inserted
+ *
+ * @param {Array<{x:number, y:number}>} contour - original polygon vertices
+ * @param {Array<null|{x:number,y:number}>} curves - control points (same length as contour)
+ * @param {number} segments - Bézier subdivisions per curved edge (default 12)
+ * @returns {Array<{x:number, y:number}>}
+ */
+export function expandCurvedContour(contour, curves, segments = 12) {
+  const n = contour.length;
+  if (n < 2) return contour.map(p => ({ x: p.x, y: p.y }));
+  if (!curves || curves.length === 0 || curves.every(c => !c)) {
+    return contour.map(p => ({ x: p.x, y: p.y }));
+  }
+
+  const result = [];
+  for (let i = 0; i < n; i++) {
+    const p0 = contour[i];
+    const cp = curves[i];
+    result.push({ x: p0.x, y: p0.y });
+    if (cp) {
+      const p1 = contour[(i + 1) % n];
+      for (let j = 1; j < segments; j++) {
+        const t = j / segments;
+        const mt = 1 - t;
+        result.push({
+          x: mt * mt * p0.x + 2 * mt * t * cp.x + t * t * p1.x,
+          y: mt * mt * p0.y + 2 * mt * t * cp.y + t * t * p1.y,
+        });
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Returns the trim distance at each corner vertex for rounded walls.
  * Each value is the distance along both adjacent edges where the arc begins/ends.
  *

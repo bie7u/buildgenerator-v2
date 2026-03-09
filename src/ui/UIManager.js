@@ -93,7 +93,7 @@ export class UIManager {
   // ── Tool buttons ──────────────────────────────────────────────────────────
   _bindTools() {
     const hintMap = {
-      'select':         'Click to select elements. Drag vertices or elements to reposition.',
+      'select':         'Click to select elements. Drag edge midpoints (grey dots) to curve walls. Double-click a curve handle (cyan) to straighten. Drag vertices to reposition.',
       'move':           'Click and drag any element to move it. Wall elements snap to the nearest wall.',
       'draw-contour':   'Floor 0: draws building base contour. Floor 1+: draws this floor\'s custom contour. Double-click or click near first point to close.',
       'draw-circle':    'Click once to place the centre, then click again to set the radius. Creates a circular (tower) footprint.',

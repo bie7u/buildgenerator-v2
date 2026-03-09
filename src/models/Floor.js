@@ -14,6 +14,7 @@ export class Floor {
     this.index = index;
     this.height = height;
     this.contour = null;
+    this.contourCurves = null;  // Array<null|THREE.Vector2> for per-edge Bézier control points
     this.internalWalls = [];
     this.windows = [];
     this.doors = [];
@@ -30,6 +31,9 @@ export class Floor {
       index: this.index,
       height: this.height,
       contour: this.contour ? this.contour.map(p => ({ x: p.x, y: p.y })) : null,
+      contourCurves: this.contourCurves
+        ? this.contourCurves.map(cp => cp ? { x: cp.x, y: cp.y } : null)
+        : null,
       internalWalls: this.internalWalls.map(w => w.toJSON()),
       windows: this.windows.map(w => w.toJSON()),
       doors: this.doors.map(d => d.toJSON()),
@@ -46,6 +50,9 @@ export class Floor {
     const f = new Floor(index !== undefined ? index : data.index, data.height ?? 2.7);
     f.contour = data.contour
       ? data.contour.map(p => new THREE.Vector2(p.x, p.y))
+      : null;
+    f.contourCurves = data.contourCurves
+      ? data.contourCurves.map(cp => cp ? new THREE.Vector2(cp.x, cp.y) : null)
       : null;
     f.internalWalls = (data.internalWalls || []).map(w => Wall.fromJSON(w));
     f.windows = (data.windows || []).map(w => WindowElement.fromJSON(w));
