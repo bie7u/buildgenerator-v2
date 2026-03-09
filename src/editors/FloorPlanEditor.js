@@ -1119,6 +1119,7 @@ export class FloorPlanEditor {
 
   _findNearestWallSegment(pos, maxDist) {
     const contour = this.activeContour;
+    const curves = this.activeContourCurves;
     const n = contour.length;
     if (n < 2) return null;
 
@@ -1129,24 +1130,45 @@ export class FloorPlanEditor {
     for (let i = 0; i < n; i++) {
       const p1 = contour[i];
       const p2 = contour[(i + 1) % n];
-      const segDir = new THREE.Vector2().subVectors(p2, p1);
-      const segLen = segDir.length();
-      if (segLen < 0.001) continue;
-      const segDirN = segDir.clone().divideScalar(segLen);
+      const cp = curves && curves[i];
 
-      const toPos = new THREE.Vector2().subVectors(pos, p1);
-      let t = toPos.dot(segDirN);
-      t = Math.max(0, Math.min(segLen, t));
+      if (cp) {
+        // Curved edge: sample the Bézier to find the nearest point.
+        const chordLen = p1.distanceTo(p2);
+        const SAMPLES = 24;
+        for (let s = 0; s <= SAMPLES; s++) {
+          const t = s / SAMPLES;
+          const mt = 1 - t;
+          const bx = mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x;
+          const bz = mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y;
+          const dist = pos.distanceTo(new THREE.Vector2(bx, bz));
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestWallIndex = i;
+            bestOffset = t * chordLen;
+          }
+        }
+      } else {
+        // Straight edge: project pos onto the segment.
+        const segDir = new THREE.Vector2().subVectors(p2, p1);
+        const segLen = segDir.length();
+        if (segLen < 0.001) continue;
+        const segDirN = segDir.clone().divideScalar(segLen);
 
-      const closest = new THREE.Vector2(
-        p1.x + segDirN.x * t,
-        p1.y + segDirN.y * t
-      );
-      const dist = pos.distanceTo(closest);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestWallIndex = i;
-        bestOffset = t;
+        const toPos = new THREE.Vector2().subVectors(pos, p1);
+        let t = toPos.dot(segDirN);
+        t = Math.max(0, Math.min(segLen, t));
+
+        const closest = new THREE.Vector2(
+          p1.x + segDirN.x * t,
+          p1.y + segDirN.y * t
+        );
+        const dist = pos.distanceTo(closest);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestWallIndex = i;
+          bestOffset = t;
+        }
       }
     }
 
@@ -1167,6 +1189,19 @@ export class FloorPlanEditor {
     const wp = this._getWallWorldPositions(el.wallIndex);
     if (!wp) return null;
     const { p1, p2 } = wp;
+    const curves = this.activeContourCurves;
+    const cp = curves && curves[el.wallIndex];
+
+    if (cp) {
+      const chordLen = p1.distanceTo(p2);
+      const t = (el.offsetAlongWall + (el.width || 0) / 2) / (chordLen || 1);
+      const mt = 1 - t;
+      return new THREE.Vector2(
+        mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x,
+        mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y,
+      );
+    }
+
     const dir = new THREE.Vector2().subVectors(p2, p1).normalize();
     const midOff = el.offsetAlongWall + (el.width || 0) / 2;
     return new THREE.Vector2(p1.x + dir.x * midOff, p1.y + dir.y * midOff);
@@ -1679,17 +1714,37 @@ export class FloorPlanEditor {
     const wp = this._getWallWorldPositions(el.wallIndex);
     if (!wp) return;
     const { p1, p2 } = wp;
-    const dir = new THREE.Vector2().subVectors(p2, p1);
-    dir.normalize();
+    const curves = this.activeContourCurves;
+    const cp = curves && curves[el.wallIndex];
 
-    const startP = new THREE.Vector2(
-      p1.x + dir.x * el.offsetAlongWall,
-      p1.y + dir.y * el.offsetAlongWall
-    );
-    const endP = new THREE.Vector2(
-      p1.x + dir.x * (el.offsetAlongWall + el.width),
-      p1.y + dir.y * (el.offsetAlongWall + el.width)
-    );
+    let startP, endP, dir;
+
+    if (cp) {
+      // Curved wall: map chord-fraction offsets to Bézier positions.
+      const chordLen = p1.distanceTo(p2);
+      if (chordLen < 0.001) return;
+      const bezEval = (t) => {
+        const mt = 1 - t;
+        return new THREE.Vector2(
+          mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x,
+          mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y,
+        );
+      };
+      const tStart = el.offsetAlongWall / chordLen;
+      const tEnd   = (el.offsetAlongWall + el.width) / chordLen;
+      const tMid   = (tStart + tEnd) / 2;
+      startP = bezEval(tStart);
+      endP   = bezEval(tEnd);
+      // Use tangent at midpoint for the inward normal.
+      const dtx = 2 * (1 - tMid) * (cp.x - p1.x) + 2 * tMid * (p2.x - cp.x);
+      const dtz = 2 * (1 - tMid) * (cp.y - p1.y) + 2 * tMid * (p2.y - cp.y);
+      const tLen = Math.sqrt(dtx * dtx + dtz * dtz) || 1;
+      dir = new THREE.Vector2(dtx / tLen, dtz / tLen);
+    } else {
+      dir = new THREE.Vector2().subVectors(p2, p1).normalize();
+      startP = new THREE.Vector2(p1.x + dir.x * el.offsetAlongWall,           p1.y + dir.y * el.offsetAlongWall);
+      endP   = new THREE.Vector2(p1.x + dir.x * (el.offsetAlongWall + el.width), p1.y + dir.y * (el.offsetAlongWall + el.width));
+    }
 
     const nx = dir.y, nz = -dir.x;
     const inset = 0.15;

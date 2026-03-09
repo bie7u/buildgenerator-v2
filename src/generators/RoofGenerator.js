@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { roundContour } from '../utils/ContourUtils.js';
+import { roundContour, expandCurvedContour } from '../utils/ContourUtils.js';
 
 export class RoofGenerator {
   constructor(sceneManager) {
@@ -26,21 +26,28 @@ export class RoofGenerator {
     // Geometry group – all roof meshes are placed at world-space positions.
     const geoGroup = new THREE.Group();
 
+    // Expand per-edge Bézier curves to a polyline so that bounding-box and
+    // shape computations include curved wall sections.
+    const rawCurves = building.contourCurves;
+    const hasCurves = rawCurves && rawCurves.length > 0 && rawCurves.some(cp => cp !== null);
+    const expandedContour = hasCurves
+      ? expandCurvedContour(building.contour, rawCurves, 12)
+      : building.contour;
+
     const roof = building.roof;
     if (!roof || roof.type === 'flat') {
-      this._generateFlatRoof(building, totalHeight, roof?.overhang ?? 0, geoGroup);
+      this._generateFlatRoof(building, expandedContour, totalHeight, roof?.overhang ?? 0, geoGroup);
     } else {
-      const contour = building.contour;
-      if (contour.length >= 3) {
+      if (expandedContour.length >= 3) {
         switch (roof.type) {
-          case 'gabled':  this._generateGabledRoof(building, contour, totalHeight, roof, geoGroup); break;
-          case 'hip':     this._generateHipRoof(building, contour, totalHeight, roof, geoGroup); break;
-          case 'shed':    this._generateShedRoof(building, contour, totalHeight, roof, geoGroup); break;
-          case 'gambrel': this._generateGambrelRoof(building, contour, totalHeight, roof, geoGroup); break;
-          default:        this._generateGabledRoof(building, contour, totalHeight, roof, geoGroup);
+          case 'gabled':  this._generateGabledRoof(building, expandedContour, totalHeight, roof, geoGroup); break;
+          case 'hip':     this._generateHipRoof(building, expandedContour, totalHeight, roof, geoGroup); break;
+          case 'shed':    this._generateShedRoof(building, expandedContour, totalHeight, roof, geoGroup); break;
+          case 'gambrel': this._generateGambrelRoof(building, expandedContour, totalHeight, roof, geoGroup); break;
+          default:        this._generateGabledRoof(building, expandedContour, totalHeight, roof, geoGroup);
         }
         if (roof.dormers && roof.dormers.length > 0) {
-          this._generateDormers(contour, totalHeight, roof, geoGroup);
+          this._generateDormers(expandedContour, totalHeight, roof, geoGroup);
         }
       }
     }
@@ -65,14 +72,12 @@ export class RoofGenerator {
     parentGroup.add(pivotGroup);
   }
 
-  _generateFlatRoof(building, totalHeight, overhang, group) {
-    const contour = building.contour;
-    if (contour.length < 3) return;
+  _generateFlatRoof(building, expandedContour, totalHeight, overhang, group) {
+    if (expandedContour.length < 3) return;
 
-    // Apply corner rounding before the overhang expansion so that the flat
-    // roof inherits the same rounded footprint as the building below.
+    // Apply corner rounding (if any) after Bézier expansion.
     const cr = building.cornerRadius || 0;
-    const base = cr > 0 ? roundContour(contour, cr) : contour;
+    const base = cr > 0 ? roundContour(expandedContour, cr) : expandedContour;
     const expanded = this._expandContour(base, overhang);
 
     const shape = new THREE.Shape();

@@ -94,7 +94,7 @@ export class BuildingGenerator {
 
       this._generateExternalWalls(floorContour, building.wallThickness, floor, floorBaseY, group, cr, floorCurves);
       this._generateInternalWalls(building, floor, floorBaseY, group);
-      this._generateWindowPanes(floorContour, floor, floorBaseY, group);
+      this._generateWindowPanes(floorContour, floorCurves, floor, floorBaseY, group);
       this._generateBalconies(floorContour, floor, floorBaseY, group);
       this._generateElevator(floor, floorBaseY, group);
       this._generateStairs(floor, floorBaseY, group);
@@ -161,9 +161,12 @@ export class BuildingGenerator {
       const cp = curves && curves[i];
       if (cp) {
         // ── Curved segment: subdivide along the Bézier and generate mini-walls. ──
+        const segWindows = floor.windows.filter(w => w.wallIndex === i);
+        const segDoors   = floor.doors.filter(d => d.wallIndex === i);
         this._generateCurvedWallSegment(
           contour[i], cp, contour[(i + 1) % n],
           wallThick, floorH, floorBaseY, group,
+          segWindows, segDoors,
         );
         continue;
       }
@@ -242,9 +245,11 @@ export class BuildingGenerator {
   /**
    * Generates 3D wall geometry for a single curved contour edge by subdividing
    * the quadratic Bézier into `CURVE_WALL_STEPS` straight mini-segments.
-   * Windows and doors on curved edges are not supported.
+   * Windows and doors are mapped via chord-fraction parameterization (t = offset / chordLen).
    */
-  _generateCurvedWallSegment(p0, cp, p1, wallThick, floorH, floorBaseY, group) {
+  _generateCurvedWallSegment(p0, cp, p1, wallThick, floorH, floorBaseY, group, windows = [], doors = []) {
+    const chordLen = Math.sqrt((p1.x - p0.x) ** 2 + (p1.y - p0.y) ** 2);
+
     for (let j = 0; j < CURVE_WALL_STEPS; j++) {
       const t0 = j / CURVE_WALL_STEPS;
       const t1 = (j + 1) / CURVE_WALL_STEPS;
@@ -261,13 +266,61 @@ export class BuildingGenerator {
       if (segLen < 0.001) continue;
       const ndx = dx / segLen, ndz = dz / segLen;
 
-      // Simple rectangle wall shape (no holes, no bevels on curved walls).
       const shape = new THREE.Shape();
       shape.moveTo(0, 0);
       shape.lineTo(segLen, 0);
       shape.lineTo(segLen, floorH);
       shape.lineTo(0, floorH);
       shape.closePath();
+
+      // Cut holes for windows and doors that fall within this mini-segment.
+      if (chordLen > 0.001 && (windows.length > 0 || doors.length > 0)) {
+        const holes = [];
+        const dtInv = CURVE_WALL_STEPS; // 1 / (t1 - t0)
+
+        for (const win of windows) {
+          const tLeft  = win.offsetAlongWall / chordLen;
+          const tRight = (win.offsetAlongWall + win.width) / chordLen;
+          const tLo = Math.max(tLeft, t0);
+          const tHi = Math.min(tRight, t1);
+          if (tLo >= tHi) continue;
+          const x0 = Math.max(0.001, segLen * (tLo - t0) * dtInv);
+          const x1 = Math.min(segLen - 0.001, segLen * (tHi - t0) * dtInv);
+          if (x0 >= x1) continue;
+          const y0 = win.sillHeight;
+          const y1 = y0 + win.height;
+          if (y1 > floorH - OPENING_BOUNDARY_TOLERANCE) continue;
+          const hole = new THREE.Path();
+          hole.moveTo(x0, y0);
+          hole.lineTo(x1, y0);
+          hole.lineTo(x1, y1);
+          hole.lineTo(x0, y1);
+          hole.closePath();
+          holes.push(hole);
+        }
+
+        for (const door of doors) {
+          const tLeft  = door.offsetAlongWall / chordLen;
+          const tRight = (door.offsetAlongWall + door.width) / chordLen;
+          const tLo = Math.max(tLeft, t0);
+          const tHi = Math.min(tRight, t1);
+          if (tLo >= tHi) continue;
+          const x0 = Math.max(0.001, segLen * (tLo - t0) * dtInv);
+          const x1 = Math.min(segLen - 0.001, segLen * (tHi - t0) * dtInv);
+          if (x0 >= x1) continue;
+          const y1 = door.height;
+          if (y1 > floorH - OPENING_BOUNDARY_TOLERANCE) continue;
+          const hole = new THREE.Path();
+          hole.moveTo(x0, 0);
+          hole.lineTo(x1, 0);
+          hole.lineTo(x1, y1);
+          hole.lineTo(x0, y1);
+          hole.closePath();
+          holes.push(hole);
+        }
+
+        shape.holes = holes;
+      }
 
       const geo = new THREE.ExtrudeGeometry(shape, { depth: wallThick, bevelEnabled: false });
       const m = new THREE.Matrix4();
@@ -707,7 +760,7 @@ export class BuildingGenerator {
   }
 
   // ── Window panes ──────────────────────────────────────────────────────────
-  _generateWindowPanes(contour, floor, floorBaseY, group) {
+  _generateWindowPanes(contour, curves, floor, floorBaseY, group) {
     const n = contour.length;
 
     for (const win of floor.windows) {
@@ -715,13 +768,30 @@ export class BuildingGenerator {
       const p1 = contour[win.wallIndex];
       const p2 = contour[(win.wallIndex + 1) % n];
       const dx = p2.x - p1.x, dz = p2.y - p1.y;
-      const wallLen = Math.sqrt(dx * dx + dz * dz);
-      if (wallLen < 0.01) continue;
-      const ndx = dx / wallLen, ndz = dz / wallLen;
+      const chordLen = Math.sqrt(dx * dx + dz * dz);
+      if (chordLen < 0.01) continue;
 
+      const cp = curves && curves[win.wallIndex];
       const centerOffset = win.offsetAlongWall + win.width / 2;
-      const cx = p1.x + ndx * centerOffset;
-      const cz = p1.y + ndz * centerOffset;
+      let cx, cz, ndx, ndz;
+
+      if (cp) {
+        // Curved wall: evaluate Bézier at chord-fraction parameter.
+        const t = centerOffset / chordLen;
+        const mt = 1 - t;
+        cx = mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x;
+        cz = mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y;
+        // Tangent direction at t.
+        const dtx = 2 * (1 - t) * (cp.x - p1.x) + 2 * t * (p2.x - cp.x);
+        const dtz = 2 * (1 - t) * (cp.y - p1.y) + 2 * t * (p2.y - cp.y);
+        const tLen = Math.sqrt(dtx * dtx + dtz * dtz) || 1;
+        ndx = dtx / tLen; ndz = dtz / tLen;
+      } else {
+        ndx = dx / chordLen; ndz = dz / chordLen;
+        cx = p1.x + ndx * centerOffset;
+        cz = p1.y + ndz * centerOffset;
+      }
+
       const cy = floorBaseY + win.sillHeight + win.height / 2;
 
       const geo = new THREE.PlaneGeometry(win.width, win.height);

@@ -2,6 +2,11 @@
   "name": "buildgenerator-v2",
   "version": "2.0.0",
   "description": "User-friendly 2D/3D building floor plan editor",
-  "scripts": { "start": "npx serve ." },
-  "dependencies": { "three": "^0.160.1" }
+  "scripts": {
+    "start": "npx serve ."
+  },
+  "dependencies": {
+    "three": "^0.160.1",
+    "vite": "^7.3.1"
+  }
 }
