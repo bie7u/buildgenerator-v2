@@ -157,6 +157,16 @@ export class UIManager {
     document.getElementById('independent-floors').addEventListener('change', e => {
       // Independent floor mode: future feature hook
     });
+
+    const wallOpacityEl = document.getElementById('wall-opacity');
+    const wallOpacityVal = document.getElementById('wall-opacity-value');
+    if (wallOpacityEl) {
+      wallOpacityEl.addEventListener('input', e => {
+        const pct = parseInt(e.target.value, 10);
+        if (wallOpacityVal) wallOpacityVal.textContent = `${pct}%`;
+        app.generator.setWallOpacity(pct / 100);
+      });
+    }
   }
 
   _updateBuildingSettingsInputs() {

@@ -977,6 +977,23 @@ export class BuildingGenerator {
     }
   }
 
+  /**
+   * Live-update the opacity of structural materials (exterior walls, floor
+   * slabs, internal walls, ceiling bevels).  Balconies, stairs, elevator,
+   * windows and railings are intentionally kept fully opaque so they stay
+   * visible when the walls are faded for an X-ray look.
+   *
+   * @param {number} opacity  0.0 (invisible) … 1.0 (fully opaque)
+   */
+  setWallOpacity(opacity) {
+    const structural = [this.wallMat, this.slabMat, this.internalWallMat, this.ceilingBevelMat];
+    for (const mat of structural) {
+      mat.opacity = opacity;
+      mat.transparent = opacity < 1.0;
+      mat.needsUpdate = true;
+    }
+  }
+
   // ── Disposal ──────────────────────────────────────────────────────────────
   _disposeObject(obj) {
     obj.traverse(child => {

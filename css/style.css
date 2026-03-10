@@ -207,6 +207,28 @@ html, body {
   cursor: pointer;
 }
 
+/* ── Wall-opacity slider ─────────────────────────────────────────────────── */
+.opacity-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.opacity-slider-wrap input[type="range"] {
+  width: 52px; /* fits the 180 px left panel alongside the % label */
+  height: 4px;
+  cursor: pointer;
+  accent-color: #4488cc;
+  flex-shrink: 0;
+}
+.opacity-value {
+  font-size: 10px;
+  color: #888;
+  min-width: 28px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 /* ── Roof settings section ───────────────────────────────────────────────── */
 #roof-settings-section .panel-section-title {
   color: #ff8844;
