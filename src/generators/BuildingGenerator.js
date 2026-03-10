@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { roundContour, getCornerTrims, expandCurvedContour } from '../utils/ContourUtils.js';
+import { roundContour, getCornerTrims, expandCurvedContour, bezierAt, bezierTangent } from '../utils/ContourUtils.js';
 
 // Stair geometry constants (all in metres)
 const MAX_TREAD_DEPTH_M = 0.30;
@@ -95,7 +95,7 @@ export class BuildingGenerator {
       this._generateExternalWalls(floorContour, building.wallThickness, floor, floorBaseY, group, cr, floorCurves);
       this._generateInternalWalls(building, floor, floorBaseY, group);
       this._generateWindowPanes(floorContour, floorCurves, floor, floorBaseY, group);
-      this._generateBalconies(floorContour, floor, floorBaseY, group);
+      this._generateBalconies(floorContour, floorCurves, floor, floorBaseY, group);
       this._generateElevator(floor, floorBaseY, group);
       this._generateStairs(floor, floorBaseY, group);
 
@@ -778,14 +778,10 @@ export class BuildingGenerator {
       if (cp) {
         // Curved wall: evaluate Bézier at chord-fraction parameter.
         const t = centerOffset / chordLen;
-        const mt = 1 - t;
-        cx = mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x;
-        cz = mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y;
-        // Tangent direction at t.
-        const dtx = 2 * (1 - t) * (cp.x - p1.x) + 2 * t * (p2.x - cp.x);
-        const dtz = 2 * (1 - t) * (cp.y - p1.y) + 2 * t * (p2.y - cp.y);
-        const tLen = Math.sqrt(dtx * dtx + dtz * dtz) || 1;
-        ndx = dtx / tLen; ndz = dtz / tLen;
+        const pos = bezierAt(p1, cp, p2, t);
+        cx = pos.x; cz = pos.y;
+        const tan = bezierTangent(p1, cp, p2, t);
+        ndx = tan.x; ndz = tan.y;
       } else {
         ndx = dx / chordLen; ndz = dz / chordLen;
         cx = p1.x + ndx * centerOffset;
@@ -804,7 +800,7 @@ export class BuildingGenerator {
   }
 
   // ── Balconies ─────────────────────────────────────────────────────────────
-  _generateBalconies(contour, floor, floorBaseY, group) {
+  _generateBalconies(contour, curves, floor, floorBaseY, group) {
     const n = contour.length;
 
     for (const bal of floor.balconies) {
@@ -812,16 +808,32 @@ export class BuildingGenerator {
       const p1 = contour[bal.wallIndex];
       const p2 = contour[(bal.wallIndex + 1) % n];
       const dx = p2.x - p1.x, dz = p2.y - p1.y;
-      const wallLen = Math.sqrt(dx * dx + dz * dz);
-      if (wallLen < 0.01) continue;
-      const ndx = dx / wallLen, ndz = dz / wallLen;
+      const chordLen = Math.sqrt(dx * dx + dz * dz);
+      if (chordLen < 0.01) continue;
 
-      // Outward normal (right perp for CW-on-screen contour = away from building)
-      const ox = ndz, oz = -ndx;
+      const cp = curves && curves[bal.wallIndex];
+      const midOffset = bal.offsetAlongWall + bal.width / 2;
 
-      const midWall = bal.offsetAlongWall + bal.width / 2;
-      const cx = p1.x + ndx * midWall + ox * bal.depth / 2;
-      const cz = p1.y + ndz * midWall + oz * bal.depth / 2;
+      let cx, cz, ndx, ndz;
+
+      if (cp) {
+        // Curved wall: evaluate Bézier at chord-fraction parameter.
+        const t = midOffset / chordLen;
+        const pos = bezierAt(p1, cp, p2, t);
+        const tan = bezierTangent(p1, cp, p2, t);
+        ndx = tan.x; ndz = tan.y;
+        // Outward normal (right perp).
+        const ox = ndz, oz = -ndx;
+        cx = pos.x + ox * bal.depth / 2;
+        cz = pos.y + oz * bal.depth / 2;
+      } else {
+        ndx = dx / chordLen; ndz = dz / chordLen;
+        // Outward normal (right perp for CW-on-screen contour = away from building)
+        const ox = ndz, oz = -ndx;
+        cx = p1.x + ndx * midOffset + ox * bal.depth / 2;
+        cz = p1.y + ndz * midOffset + oz * bal.depth / 2;
+      }
+
       const cy = floorBaseY;
 
       const slabGeo = new THREE.BoxGeometry(bal.width, 0.12, bal.depth);

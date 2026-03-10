@@ -117,3 +117,39 @@ export function getCornerTrims(pts, radius) {
     return Math.min(radius, len1 * 0.45, len2 * 0.45);
   });
 }
+
+/**
+ * Evaluate a quadratic Bézier curve at parameter `t` ∈ [0, 1].
+ * Returns a plain `{x, y}` point.
+ *
+ * @param {{x:number,y:number}} p0 - start point
+ * @param {{x:number,y:number}} cp - control point
+ * @param {{x:number,y:number}} p1 - end point
+ * @param {number} t
+ * @returns {{x:number, y:number}}
+ */
+export function bezierAt(p0, cp, p1, t) {
+  const mt = 1 - t;
+  return {
+    x: mt * mt * p0.x + 2 * mt * t * cp.x + t * t * p1.x,
+    y: mt * mt * p0.y + 2 * mt * t * cp.y + t * t * p1.y,
+  };
+}
+
+/**
+ * Evaluate the normalised tangent direction of a quadratic Bézier at parameter `t`.
+ * Returns a plain `{x, y}` unit vector, or `{x:1, y:0}` for degenerate curves.
+ *
+ * @param {{x:number,y:number}} p0
+ * @param {{x:number,y:number}} cp
+ * @param {{x:number,y:number}} p1
+ * @param {number} t
+ * @returns {{x:number, y:number}}
+ */
+export function bezierTangent(p0, cp, p1, t) {
+  const dtx = 2 * (1 - t) * (cp.x - p0.x) + 2 * t * (p1.x - cp.x);
+  const dty = 2 * (1 - t) * (cp.y - p0.y) + 2 * t * (p1.y - cp.y);
+  const len = Math.sqrt(dtx * dtx + dty * dty);
+  if (len < 1e-9) return { x: 1, y: 0 };
+  return { x: dtx / len, y: dty / len };
+}

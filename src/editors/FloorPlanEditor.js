@@ -8,7 +8,7 @@ import { Balcony } from '../models/Balcony.js';
 import { Elevator } from '../models/Elevator.js';
 import { Stairs } from '../models/Stairs.js';
 import { FloorHole } from '../models/FloorHole.js';
-import { roundContour, expandCurvedContour } from '../utils/ContourUtils.js';
+import { roundContour, expandCurvedContour, bezierAt, bezierTangent } from '../utils/ContourUtils.js';
 
 // ─── 2D line/shape helpers ─────────────────────────────────────────────────
 function makeLine(pts, color, linewidth = 1) {
@@ -1138,10 +1138,8 @@ export class FloorPlanEditor {
         const SAMPLES = 24;
         for (let s = 0; s <= SAMPLES; s++) {
           const t = s / SAMPLES;
-          const mt = 1 - t;
-          const bx = mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x;
-          const bz = mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y;
-          const dist = pos.distanceTo(new THREE.Vector2(bx, bz));
+          const b = bezierAt(p1, cp, p2, t);
+          const dist = pos.distanceTo(new THREE.Vector2(b.x, b.y));
           if (dist < bestDist) {
             bestDist = dist;
             bestWallIndex = i;
@@ -1195,11 +1193,8 @@ export class FloorPlanEditor {
     if (cp) {
       const chordLen = p1.distanceTo(p2);
       const t = (el.offsetAlongWall + (el.width || 0) / 2) / (chordLen || 1);
-      const mt = 1 - t;
-      return new THREE.Vector2(
-        mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x,
-        mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y,
-      );
+      const pos = bezierAt(p1, cp, p2, t);
+      return new THREE.Vector2(pos.x, pos.y);
     }
 
     const dir = new THREE.Vector2().subVectors(p2, p1).normalize();
@@ -1723,23 +1718,16 @@ export class FloorPlanEditor {
       // Curved wall: map chord-fraction offsets to Bézier positions.
       const chordLen = p1.distanceTo(p2);
       if (chordLen < 0.001) return;
-      const bezEval = (t) => {
-        const mt = 1 - t;
-        return new THREE.Vector2(
-          mt * mt * p1.x + 2 * mt * t * cp.x + t * t * p2.x,
-          mt * mt * p1.y + 2 * mt * t * cp.y + t * t * p2.y,
-        );
-      };
       const tStart = el.offsetAlongWall / chordLen;
       const tEnd   = (el.offsetAlongWall + el.width) / chordLen;
       const tMid   = (tStart + tEnd) / 2;
-      startP = bezEval(tStart);
-      endP   = bezEval(tEnd);
+      const ps = bezierAt(p1, cp, p2, tStart);
+      const pe = bezierAt(p1, cp, p2, tEnd);
+      startP = new THREE.Vector2(ps.x, ps.y);
+      endP   = new THREE.Vector2(pe.x, pe.y);
       // Use tangent at midpoint for the inward normal.
-      const dtx = 2 * (1 - tMid) * (cp.x - p1.x) + 2 * tMid * (p2.x - cp.x);
-      const dtz = 2 * (1 - tMid) * (cp.y - p1.y) + 2 * tMid * (p2.y - cp.y);
-      const tLen = Math.sqrt(dtx * dtx + dtz * dtz) || 1;
-      dir = new THREE.Vector2(dtx / tLen, dtz / tLen);
+      const tan = bezierTangent(p1, cp, p2, tMid);
+      dir = new THREE.Vector2(tan.x, tan.y);
     } else {
       dir = new THREE.Vector2().subVectors(p2, p1).normalize();
       startP = new THREE.Vector2(p1.x + dir.x * el.offsetAlongWall,           p1.y + dir.y * el.offsetAlongWall);
@@ -1766,19 +1754,32 @@ export class FloorPlanEditor {
     const wp = this._getWallWorldPositions(bal.wallIndex);
     if (!wp) return;
     const { p1, p2 } = wp;
-    const dir = new THREE.Vector2().subVectors(p2, p1).normalize();
+    const curves = this.activeContourCurves;
+    const cp = curves && curves[bal.wallIndex];
 
-    // Outward normal (right perp for CW-on-screen contour = away from building)
-    const ox = dir.y, oz = -dir.x;
+    let startP, endP, ox, oz;
 
-    const startP = new THREE.Vector2(
-      p1.x + dir.x * bal.offsetAlongWall,
-      p1.y + dir.y * bal.offsetAlongWall
-    );
-    const endP = new THREE.Vector2(
-      p1.x + dir.x * (bal.offsetAlongWall + bal.width),
-      p1.y + dir.y * (bal.offsetAlongWall + bal.width)
-    );
+    if (cp) {
+      // Curved wall: map chord-fraction offsets to Bézier positions.
+      const chordLen = p1.distanceTo(p2);
+      if (chordLen < 0.001) return;
+      const tStart = bal.offsetAlongWall / chordLen;
+      const tEnd   = (bal.offsetAlongWall + bal.width) / chordLen;
+      const tMid   = (tStart + tEnd) / 2;
+      const ps = bezierAt(p1, cp, p2, tStart);
+      const pe = bezierAt(p1, cp, p2, tEnd);
+      startP = new THREE.Vector2(ps.x, ps.y);
+      endP   = new THREE.Vector2(pe.x, pe.y);
+      // Outward normal from tangent at midpoint.
+      const tan = bezierTangent(p1, cp, p2, tMid);
+      ox = tan.y; oz = -tan.x;
+    } else {
+      const dir = new THREE.Vector2().subVectors(p2, p1).normalize();
+      // Outward normal (right perp for CW-on-screen contour = away from building)
+      ox = dir.y; oz = -dir.x;
+      startP = new THREE.Vector2(p1.x + dir.x * bal.offsetAlongWall,              p1.y + dir.y * bal.offsetAlongWall);
+      endP   = new THREE.Vector2(p1.x + dir.x * (bal.offsetAlongWall + bal.width), p1.y + dir.y * (bal.offsetAlongWall + bal.width));
+    }
 
     const startOut = new THREE.Vector2(startP.x + ox * bal.depth, startP.y + oz * bal.depth);
     const endOut = new THREE.Vector2(endP.x + ox * bal.depth, endP.y + oz * bal.depth);
